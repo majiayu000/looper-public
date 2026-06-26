@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Looper Dashboard</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3; --dim: #8b949e; --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --purple: #bc8cff; --cyan: #39d2c0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', monospace; background: var(--bg); color: var(--text); padding: 20px; max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+  h1 .uptime { font-size: 13px; color: var(--dim); font-weight: 400; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 14px; color: var(--dim); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric { display: flex; justify-content: space-between; padding: 4px 0; }
+  .metric .label { color: var(--dim); font-size: 13px; }
+  .metric .value { font-size: 13px; font-weight: 600; }
+  .health-ok { color: var(--green); }
+  .health-error { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  th { text-align: left; padding: 10px 12px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); background: var(--bg); }
+  td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover { background: rgba(88,166,255,0.05); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .badge-running { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-idle { background: rgba(139,148,158,0.15); color: var(--dim); }
+  .badge-script { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .badge-skill { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .badge-ok { color: var(--green); }
+  .badge-fail { color: var(--red); }
+  .btn { background: var(--border); border: none; color: var(--text); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .btn:hover { background: var(--blue); color: #fff; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-run { background: rgba(63,185,80,0.15); color: var(--green); }
+  .btn-run:hover { background: var(--green); color: #fff; }
+  .log-panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .log-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .log-header h3 { font-size: 14px; }
+  .log-header .controls { display: flex; gap: 8px; }
+  .log-body { padding: 12px; max-height: 500px; overflow-y: auto; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; color: var(--dim); }
+  .log-body .text { color: var(--text); }
+  .log-body .tool { color: var(--blue); }
+  .log-body .error { color: var(--red); }
+  .tab-active { background: var(--blue) !important; color: #fff !important; }
+  .breakdown { display: flex; gap: 8px; flex-wrap: wrap; }
+  .breakdown .item { font-size: 12px; color: var(--dim); }
+  .breakdown .item b { color: var(--text); }
+
+  /* Nav tabs */
+  .nav { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .nav .btn { border-radius: 6px 6px 0 0; padding: 6px 16px; font-size: 13px; }
+
+  /* Data panels */
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .panel-section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  .panel-section h3 { font-size: 14px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--dim); }
+
+  /* Reply & candidate backlog tables */
+  .data-table { width: 100%; }
+  .data-table td { vertical-align: top; }
+  .data-table .author { color: var(--blue); font-weight: 600; }
+  .data-table .text-preview { color: var(--dim); font-size: 12px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .data-table .score { color: var(--yellow); font-weight: 600; }
+
+  /* Round log */
+  .round-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  .round-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .round-time { color: var(--dim); font-size: 12px; }
+  .round-mode { font-size: 12px; font-weight: 600; }
+  .round-metrics { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; }
+  .round-metrics .rm { color: var(--dim); }
+  .round-metrics .rm b { color: var(--text); }
+  .round-hot { color: var(--yellow); font-weight: 600; font-size: 12px; }
+  .round-empty { color: var(--red); font-size: 12px; margin-top: 6px; }
+  .round-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .round-tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: rgba(88,166,255,0.1); color: var(--blue); }
+  .round-tag.skip { background: rgba(248,81,73,0.1); color: var(--red); }
+
+  /* Tracking highlight */
+  .vl-good { color: var(--green); font-weight: 600; }
+  .vl-zero { color: var(--dim); }
+
+  /* Link */
+  a.tweet-link { color: var(--blue); text-decoration: none; }
+  a.tweet-link:hover { text-decoration: underline; }
+
+  /* Pager */
+  .pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px; font-size: 13px; color: var(--dim); }
+  .pager:empty { display: none; }
+  .pager .btn { min-width: 60px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Looper <span class="uptime" id="uptime"></span></h1>
+
+<div class="cards" id="platforms"></div>
+
+<!-- Navigation -->
+<div class="nav">
+  <button class="btn tab-active" onclick="switchTab('jobs')">Jobs</button>
+  <button class="btn" onclick="switchTab('replies')">Today Replies</button>
+  <button class="btn" onclick="switchTab('candidate-backlog')">Candidate Backlog</button>
+  <button class="btn" onclick="switchTab('reply-reviews')">Review Queue</button>
+  <button class="btn" onclick="switchTab('tracking')">Published Tracking</button>
+  <button class="btn" onclick="switchTab('rounds')">Round Log</button>
+  <button class="btn" onclick="switchTab('costs')">Costs</button>
+</div>
+
+<!-- Panel: Jobs -->
+<div class="panel active" id="panel-jobs">
+  <table>
+    <thead>
+      <tr><th>Job</th><th>Type</th><th>Schedule</th><th>Status</th><th>Last Run</th><th>Duration</th><th>Exit</th><th></th></tr>
+    </thead>
+    <tbody id="jobs"></tbody>
+  </table>
+  <div class="log-panel" id="logPanel" style="display:none">
+    <div class="log-header">
+      <h3 id="logTitle">Logs</h3>
+      <div class="controls">
+        <button class="btn" id="btnRaw" onclick="setLogMode('raw')">Raw</button>
+        <button class="btn tab-active" id="btnSummary" onclick="setLogMode('summary')">Summary</button>
+        <button class="btn" onclick="closeLog()">Close</button>
+      </div>
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+</div>
+
+<!-- Panel: Today Replies -->
+<div class="panel" id="panel-replies">
+  <div class="panel-section">
+    <h3>Today Replies</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>Time</th><th>Author</th><th>Skeleton</th><th>Style</th><th>Type</th><th>Score/VR</th><th>V</th><th>L</th><th>Target V</th><th>Target L</th><th>Link</th></tr>
+      </thead>
+      <tbody id="repliesBody"></tbody>
+    </table>
+    <div class="pager" id="pager-replies"></div>
+  </div>
+</div>
+
+<!-- Panel: Candidate Backlog -->
+<div class="panel" id="panel-candidate-backlog">
+  <div class="panel-section">
+    <h3>Pending Candidate Backlog (by score)</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>Score</th><th>Author</th><th>Text</th><th>Likes</th><th>Views</th><th>Discovered</th><th>Link</th></tr>
+      </thead>
+      <tbody id="candidateBacklogBody"></tbody>
+    </table>
+    <div class="pager" id="pager-candidate-backlog"></div>
+  </div>
+</div>
+
+<!-- Panel: Reply Review Queue -->
+<div class="panel" id="panel-reply-reviews">
+  <div class="panel-section">
+    <h3>Reply Review Queue</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>ID</th><th>Status</th><th>Author</th><th>Parent</th><th>Reply</th><th>Reviewer</th><th>Created</th><th>Link</th></tr>
+      </thead>
+      <tbody id="replyReviewsBody"></tbody>
+    </table>
+    <div class="pager" id="pager-reply-reviews"></div>
+  </div>
+</div>
+
+<!-- Panel: Effect Tracking -->
+<div class="panel" id="panel-tracking">
+  <div class="panel-section">
+    <h3>Effect Tracking (replies with V/L > 0)</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>Posted</th><th>Author</th><th>Skeleton</th><th>Style</th><th>V</th><th>L</th><th>Target V</th><th>Target L</th><th>Stage</th><th>Checked</th><th>Link</th></tr>
+      </thead>
+      <tbody id="trackingBody"></tbody>
+    </table>
+    <div class="pager" id="pager-tracking"></div>
+  </div>
+</div>
+
+<!-- Panel: Round Log -->
+<div class="panel" id="panel-rounds">
+  <div id="roundsBody"></div>
+  <div class="pager" id="pager-rounds"></div>
+</div>
+
+<!-- Panel: Costs -->
+<div class="panel" id="panel-costs">
+  <div class="cards" id="costCards"></div>
+  <div class="panel-section">
+    <h3>会话明细</h3>
+    <table class="data-table" style="table-layout:fixed">
+      <colgroup>
+        <col style="width:70px"><col style="width:120px"><col style="width:80px">
+        <col style="width:90px"><col style="width:90px"><col style="width:100px"><col style="width:100px"><col style="width:80px">
+      </colgroup>
+      <thead>
+        <tr><th>时间</th><th>类型</th><th style="text-align:right">请求数</th><th style="text-align:right">输入</th><th style="text-align:right">输出</th><th style="text-align:right">缓存写入</th><th style="text-align:right">缓存读取</th><th style="text-align:right">费用</th></tr>
+      </thead>
+      <tbody id="costsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let currentJob = null;
+let logMode = 'summary';
+let logInterval = null;
+let activeTab = 'jobs';
+const pages = { replies: 1, candidateBacklog: 1, replyReviews: 1, tracking: 1, rounds: 1 };
+
+function renderPager(id, page, totalPages, refreshFn) {
+  const el = document.getElementById(id);
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = '<button class="btn"' + (page <= 1 ? ' disabled' : '') + ' onclick="' + refreshFn + '(' + (page-1) + ')">Prev</button>'
+    + '<span>' + page + ' / ' + totalPages + '</span>'
+    + '<button class="btn"' + (page >= totalPages ? ' disabled' : '') + ' onclick="' + refreshFn + '(' + (page+1) + ')">Next</button>';
+}
+
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  return r.json();
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function parseDbTime(ts) {
+  if (!ts) return null;
+  const raw = String(ts).trim();
+  if (!raw) return null;
+
+  const normalized = raw.replace(' ', 'T');
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+
+  if (hasTimezone) {
+    const d = new Date(normalized);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // Newer writers may store local ISO without timezone (e.g. 2026-04-07T12:12:23.413775).
+  if (raw.includes('T')) {
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/);
+    if (m) {
+      const ms = m[7] ? Number((m[7] + '000').slice(0, 3)) : 0;
+      const d = new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        Number(m[6] || 0),
+        ms
+      );
+      if (!isNaN(d.getTime())) return d;
+    }
+    const d = new Date(normalized);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // Legacy SQLite datetime('now') format is UTC without explicit timezone.
+  const asUTC = new Date(normalized + 'Z');
+  if (!isNaN(asUTC.getTime())) return asUTC;
+
+  const fallback = new Date(normalized);
+  if (!isNaN(fallback.getTime())) return fallback;
+  return null;
+}
+
+function timeAgo(iso) {
+  if (!iso) return '-';
+  const d = parseDbTime(iso);
+  if (!d) return '-';
+  if (isNaN(d.getTime())) return '-';
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+
+function shortTime(ts) {
+  if (!ts) return '-';
+  const d = parseDbTime(ts);
+  if (!d) return ts.slice(11, 16) || ts;
+  if (isNaN(d.getTime())) return ts.slice(11, 16) || ts;
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
+}
+
+function tweetUrl(id) {
+  return 'https://x.com/i/status/' + id;
+}
+
+function vlClass(v) {
+  return v > 0 ? 'vl-good' : 'vl-zero';
+}
+
+function formatReplyScore(row) {
+  const selection = Number(row && row.selection_score);
+  if (Number.isFinite(selection)) {
+    if (selection > 0 && selection < 1) return selection.toFixed(2);
+    if (Number.isInteger(selection)) return String(selection);
+    return selection.toFixed(1);
+  }
+
+  const candidateVR = Number(row && row.candidate_vr);
+  if (Number.isFinite(candidateVR) && candidateVR > 0) return 'VR=' + Math.round(candidateVR);
+
+  const raw = Number(row && row.score);
+  if (!Number.isFinite(raw)) return '-';
+
+  if (raw >= 0 && raw <= 10) {
+    if (raw > 0 && raw < 1) return raw.toFixed(2);
+    if (Number.isInteger(raw)) return String(raw);
+    return raw.toFixed(1);
+  }
+
+  const targetV = Number(row && row.target_views);
+  const targetL = Number(row && row.target_likes);
+  const rounded = Math.round(raw);
+
+  if (targetV > 0 && Math.abs(raw - targetV) < 0.5) return 'VR=' + rounded;
+  if (targetL > 0 && Math.abs(raw - targetL) < 0.5) return 'L=' + rounded;
+  if (rounded >= 1000) return 'VR~' + rounded;
+  return 'raw=' + rounded;
+}
+
+function replyScoreTooltip(row) {
+  const selection = Number(row && row.selection_score);
+  if (Number.isFinite(selection)) return 'selection score (0-10 scale)';
+  const candidateVR = Number(row && row.candidate_vr);
+  if (Number.isFinite(candidateVR) && candidateVR > 0) return 'candidate VR (views/replies) captured at selection time';
+
+  const raw = Number(row && row.score);
+  if (!Number.isFinite(raw)) return 'score unavailable';
+  if (raw >= 0 && raw <= 10) return 'selection score (0-10 scale)';
+
+  const targetV = Number(row && row.target_views);
+  const targetL = Number(row && row.target_likes);
+  if (targetV > 0 && Math.abs(raw - targetV) < 0.5) {
+    return 'legacy mixed value: equals target views, shown as VR';
+  }
+  if (targetL > 0 && Math.abs(raw - targetL) < 0.5) {
+    return 'legacy mixed value: equals target likes';
+  }
+  return 'legacy mixed value stored in score column';
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.nav .btn').forEach(b => b.classList.remove('tab-active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  event.target.classList.add('tab-active');
+  document.getElementById('panel-' + tab).classList.add('active');
+  if (tab === 'replies') refreshReplies();
+  if (tab === 'candidate-backlog') refreshCandidateBacklog();
+  if (tab === 'reply-reviews') refreshReplyReviews();
+  if (tab === 'tracking') refreshTracking();
+  if (tab === 'rounds') refreshRounds();
+  if (tab === 'costs') refreshCosts();
+}
+
+// --- Status ---
+async function refreshStatus() {
+  try {
+    const data = await fetchJSON('/status');
+    document.getElementById('uptime').textContent = 'uptime: ' + data.uptime;
+    const el = document.getElementById('platforms');
+    let html = '';
+    for (const [name, p] of Object.entries(data.platforms)) {
+      const hc = p.health === 'ok' ? 'health-ok' : 'health-error';
+      let breakdown = '';
+      if (p.action_breakdown) {
+        breakdown = '<div class="breakdown">';
+        for (const [k, v] of Object.entries(p.action_breakdown)) {
+          breakdown += '<span class="item"><b>' + v + '</b> ' + k + '</span>';
+        }
+        breakdown += '</div>';
+      }
+      html += '<div class="card"><h2>' + name + '</h2>'
+        + '<div class="metric"><span class="label">Health</span><span class="value ' + hc + '">' + p.health + '</span></div>'
+        + '<div class="metric"><span class="label">Candidate Backlog</span><span class="value">' + p.candidate_backlog_pending + '</span></div>'
+        + '<div class="metric"><span class="label">Today Actions</span><span class="value">' + p.today_actions + '</span></div>'
+        + (breakdown ? '<div style="margin-top:8px">' + breakdown + '</div>' : '')
+        + '</div>';
+    }
+    el.innerHTML = html;
+  } catch(e) { console.error('status error', e); }
+}
+
+// --- Jobs ---
+async function refreshJobs() {
+  try {
+    const jobs = await fetchJSON('/api/jobs');
+    const el = document.getElementById('jobs');
+    let html = '';
+    for (const j of jobs) {
+      const sc = j.running ? '<span class="badge badge-running">running</span>' : '<span class="badge badge-idle">idle</span>';
+      const tc = j.type === 'skill' ? '<span class="badge badge-skill">skill</span>' : '<span class="badge badge-script">script</span>';
+      const ec = j.last_exit_code === 0 ? '<span class="badge-ok">0</span>' : (j.last_exit_code ? '<span class="badge-fail">' + j.last_exit_code + '</span>' : '-');
+      const active = currentJob === j.name ? 'style="background:rgba(88,166,255,0.08)"' : '';
+      html += '<tr ' + active + '>'
+        + '<td><a href="#" onclick="viewLog(\'' + j.name + '\');return false" style="color:var(--blue);text-decoration:none">' + j.name + '</a></td>'
+        + '<td>' + tc + '</td>'
+        + '<td style="color:var(--dim)">' + j.schedule + '</td>'
+        + '<td>' + sc + '</td>'
+        + '<td>' + timeAgo(j.last_run_at) + '</td>'
+        + '<td>' + (j.last_duration || '-') + '</td>'
+        + '<td>' + ec + '</td>'
+        + '<td><button class="btn btn-run" onclick="runJob(\'' + j.name + '\')"' + (j.running ? ' disabled' : '') + '>Run</button></td>'
+        + '</tr>';
+    }
+    el.innerHTML = html;
+  } catch(e) { console.error('jobs error', e); }
+}
+
+async function runJob(name) {
+  await fetch('/run?job=' + name, { method: 'POST' });
+  viewLog(name);
+  refreshJobs();
+}
+
+function viewLog(name) {
+  currentJob = name;
+  document.getElementById('logPanel').style.display = '';
+  document.getElementById('logTitle').textContent = name;
+  refreshLog();
+  if (logInterval) clearInterval(logInterval);
+  logInterval = setInterval(refreshLog, 3000);
+}
+
+function closeLog() {
+  currentJob = null;
+  document.getElementById('logPanel').style.display = 'none';
+  if (logInterval) { clearInterval(logInterval); logInterval = null; }
+}
+
+function setLogMode(mode) {
+  logMode = mode;
+  document.getElementById('btnRaw').className = mode === 'raw' ? 'btn tab-active' : 'btn';
+  document.getElementById('btnSummary').className = mode === 'summary' ? 'btn tab-active' : 'btn';
+  refreshLog();
+}
+
+async function refreshLog() {
+  if (!currentJob) return;
+  try {
+    const filter = logMode === 'summary' ? '&filter=summary' : '';
+    const r = await fetch('/logs?job=' + currentJob + filter);
+    const text = await r.text();
+    const el = document.getElementById('logBody');
+    if (logMode === 'summary') {
+      let html = '';
+      for (const line of text.split('\n')) {
+        if (line.startsWith('[text]')) html += '<div class="text">' + esc(line) + '</div>';
+        else if (line.startsWith('[tool]')) html += '<div class="tool">' + esc(line) + '</div>';
+        else if (line.startsWith('[error]')) html += '<div class="error">' + esc(line) + '</div>';
+        else if (line.trim()) html += '<div>' + esc(line) + '</div>';
+      }
+      el.innerHTML = html;
+    } else {
+      el.textContent = text;
+    }
+    el.scrollTop = el.scrollHeight;
+  } catch(e) { console.error('log error', e); }
+}
+
+// --- Today Replies ---
+async function refreshReplies(pg) {
+  if (pg) pages.replies = pg;
+  try {
+    const resp = await fetchJSON('/api/replies?platform=x&page=' + pages.replies);
+    const data = resp.data || [];
+    const el = document.getElementById('repliesBody');
+    if (!data.length) { el.innerHTML = '<tr><td colspan="11" style="color:var(--dim);text-align:center;padding:20px">No replies today</td></tr>'; renderPager('pager-replies',1,1,'refreshReplies'); return; }
+    let html = '';
+    for (const r of data) {
+      const scoreText = formatReplyScore(r);
+      const scoreTip = esc(replyScoreTooltip(r));
+      html += '<tr>'
+        + '<td>' + shortTime(r.posted_at) + '</td>'
+        + '<td class="author">' + esc(r.author) + '</td>'
+        + '<td>' + esc(r.skeleton || '-') + '</td>'
+        + '<td>' + esc(r.reply_style || '-') + '</td>'
+        + '<td>' + esc(r.type || 'reply') + '</td>'
+        + '<td class="num score" title="' + scoreTip + '">' + scoreText + '</td>'
+        + '<td class="num ' + vlClass(r.views) + '">' + r.views + '</td>'
+        + '<td class="num ' + vlClass(r.likes) + '">' + r.likes + '</td>'
+        + '<td class="num">' + r.target_views + '</td>'
+        + '<td class="num">' + r.target_likes + '</td>'
+        + '<td><a class="tweet-link" href="' + tweetUrl(r.reply_id) + '" target="_blank">view</a></td>'
+        + '</tr>';
+    }
+    el.innerHTML = html;
+    renderPager('pager-replies', resp.page, resp.pages, 'refreshReplies');
+  } catch(e) { console.error('replies error', e); }
+}
+
+// --- Candidate Backlog ---
+async function refreshCandidateBacklog(pg) {
+  if (pg) pages.candidateBacklog = pg;
+  try {
+    const resp = await fetchJSON('/api/candidate-backlog?platform=x&page=' + pages.candidateBacklog);
+    const data = resp.data || [];
+    const el = document.getElementById('candidateBacklogBody');
+    if (!data.length) { el.innerHTML = '<tr><td colspan="7" style="color:var(--dim);text-align:center;padding:20px">Candidate backlog empty</td></tr>'; renderPager('pager-candidate-backlog',1,1,'refreshCandidateBacklog'); return; }
+    let html = '';
+    for (const q of data) {
+      html += '<tr>'
+        + '<td class="num score">' + q.score.toFixed(1) + '</td>'
+        + '<td class="author">' + esc(q.author) + '</td>'
+        + '<td class="text-preview" title="' + esc(q.text) + '">' + esc(q.text) + '</td>'
+        + '<td class="num">' + q.likes + '</td>'
+        + '<td class="num">' + q.views + '</td>'
+        + '<td>' + shortTime(q.discovered_at) + '</td>'
+        + '<td><a class="tweet-link" href="' + tweetUrl(q.tweet_id) + '" target="_blank">view</a></td>'
+        + '</tr>';
+    }
+    el.innerHTML = html;
+    renderPager('pager-candidate-backlog', resp.page, resp.pages, 'refreshCandidateBacklog');
+  } catch(e) { console.error('candidate backlog error', e); }
+}
+
+// --- Reply Reviews ---
+async function refreshReplyReviews(pg) {
+  if (pg) pages.replyReviews = pg;
+  try {
+    const resp = await fetchJSON('/api/reply-reviews?platform=x&page=' + pages.replyReviews);
+    const data = resp.data || [];
+    const el = document.getElementById('replyReviewsBody');
+    if (!data.length) { el.innerHTML = '<tr><td colspan="8" style="color:var(--dim);text-align:center;padding:20px">Review queue empty</td></tr>'; renderPager('pager-reply-reviews',1,1,'refreshReplyReviews'); return; }
+    let html = '';
+    for (const q of data) {
+      const reviewer = (q.reviewer_type || '-') + (q.reviewer_id ? ':' + q.reviewer_id : '');
+      html += '<tr>'
+        + '<td class="num">' + q.id + '</td>'
+        + '<td><span class="badge badge-' + (q.status === 'approved' ? 'running' : 'idle') + '">' + esc(q.status) + '</span></td>'
+        + '<td class="author">' + esc(q.author) + '</td>'
+        + '<td class="text-preview" title="' + esc(q.parent_text) + '">' + esc(q.parent_text) + '</td>'
+        + '<td class="text-preview" title="' + esc(q.reply_text) + '">' + esc(q.reply_text) + '</td>'
+        + '<td>' + esc(reviewer) + '</td>'
+        + '<td>' + shortTime(q.created_at) + '</td>'
+        + '<td><a class="tweet-link" href="' + tweetUrl(q.parent_id) + '" target="_blank">parent</a></td>'
+        + '</tr>';
+    }
+    el.innerHTML = html;
+    renderPager('pager-reply-reviews', resp.page, resp.pages, 'refreshReplyReviews');
+  } catch(e) { console.error('reply reviews error', e); }
+}
+
+// --- Effect Tracking ---
+async function refreshTracking(pg) {
+  if (pg) pages.tracking = pg;
+  try {
+    const resp = await fetchJSON('/api/tracking?platform=x&page=' + pages.tracking);
+    const data = resp.data || [];
+    const el = document.getElementById('trackingBody');
+    if (!data.length) { el.innerHTML = '<tr><td colspan="11" style="color:var(--dim);text-align:center;padding:20px">No tracking data yet</td></tr>'; renderPager('pager-tracking',1,1,'refreshTracking'); return; }
+    let html = '';
+    for (const t of data) {
+      html += '<tr>'
+        + '<td>' + shortTime(t.posted_at) + '</td>'
+        + '<td class="author">' + esc(t.author) + '</td>'
+        + '<td>' + esc(t.skeleton || '-') + '</td>'
+        + '<td>' + esc(t.reply_style || '-') + '</td>'
+        + '<td class="num ' + vlClass(t.views) + '">' + t.views + '</td>'
+        + '<td class="num ' + vlClass(t.likes) + '">' + t.likes + '</td>'
+        + '<td class="num">' + t.target_views + '</td>'
+        + '<td class="num">' + t.target_likes + '</td>'
+        + '<td>' + esc(t.check_stage || '-') + '</td>'
+        + '<td>' + shortTime(t.last_checked_at) + '</td>'
+        + '<td><a class="tweet-link" href="' + tweetUrl(t.reply_id) + '" target="_blank">view</a></td>'
+        + '</tr>';
+    }
+    el.innerHTML = html;
+    renderPager('pager-tracking', resp.page, resp.pages, 'refreshTracking');
+  } catch(e) { console.error('tracking error', e); }
+}
+
+// --- Round Log ---
+async function refreshRounds(pg) {
+  if (pg) pages.rounds = pg;
+  try {
+    const resp = await fetchJSON('/api/rounds?platform=x&page=' + pages.rounds + '&per_page=30');
+    const data = resp.data || [];
+    const el = document.getElementById('roundsBody');
+    if (!data.length) { el.innerHTML = '<div style="color:var(--dim);text-align:center;padding:40px">No round logs yet</div>'; renderPager('pager-rounds',1,1,'refreshRounds'); return; }
+    let html = '';
+    for (const r of data) {
+      let tags = '';
+      try {
+        const sk = JSON.parse(r.skeletons || '{}');
+        for (const [k,v] of Object.entries(sk)) {
+          tags += '<span class="round-tag">' + esc(k) + ' x' + v + '</span>';
+        }
+      } catch(e) {}
+      try {
+        const sr = JSON.parse(r.skip_reasons || '{}');
+        for (const [k,v] of Object.entries(sr)) {
+          tags += '<span class="round-tag skip">' + esc(k) + ' x' + v + '</span>';
+        }
+      } catch(e) {}
+
+      const hot = r.hot_topic ? '<span class="round-hot">* ' + esc(r.hot_topic) + ' ' + (r.hot_pct||0).toFixed(0) + '%</span>' : '';
+      const empty = r.empty_reason ? '<div class="round-empty">|| ' + esc(r.empty_reason) + '</div>' : '';
+
+      html += '<div class="round-card">'
+        + '<div class="round-header">'
+        + '<span class="round-time">#' + r.id + ' · ' + shortTime(r.ts) + '</span>'
+        + '<span class="round-mode">' + esc(r.mode || 'normal') + '</span>'
+        + hot
+        + '</div>'
+        + '<div class="round-metrics">'
+        + '<span class="rm">ForYou: <b>' + r.foryou_new + '</b>/' + r.foryou_total + '</span>'
+        + '<span class="rm">Following: <b>' + r.following_new + '</b>/' + r.following_total + '</span>'
+        + '<span class="rm">Replies: <b>' + r.replies_total + '</b> (cn:' + r.replies_cn + ' en:' + r.replies_en + ')</span>'
+        + '<span class="rm">Quota: <b>' + r.quota_reply_used + '</b>/' + r.quota_reply_limit + ' (h:' + r.quota_hourly_used + '/' + r.quota_hourly_limit + ')</span>'
+        + '<span class="rm">Backlog: <b>' + r.backlog_count + '</b></span>'
+        + '</div>'
+        + (tags ? '<div class="round-tags">' + tags + '</div>' : '')
+        + empty
+        + '</div>';
+    }
+    el.innerHTML = html;
+    renderPager('pager-rounds', resp.page, resp.pages, 'refreshRounds');
+  } catch(e) { console.error('rounds error', e); }
+}
+
+// --- Costs ---
+function fmtTokens(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+  return n;
+}
+
+async function refreshCosts() {
+  try {
+    const report = await fetchJSON('/api/costs');
+    // Summary cards
+    const cardsEl = document.getElementById('costCards');
+    let ch = '<div class="card"><h2>今日合计</h2><div class="metric"><span class="label">费用</span><span class="value" style="color:var(--yellow)">$' + report.total_usd.toFixed(2) + '</span></div>'
+      + '<div class="metric"><span class="label">会话数</span><span class="value">' + (report.sessions||[]).length + '</span></div></div>';
+    for (const t of (report.by_type||[])) {
+      ch += '<div class="card"><h2>' + esc(t.job_type) + '</h2>'
+        + '<div class="metric"><span class="label">费用</span><span class="value" style="color:var(--yellow)">$' + t.cost_usd.toFixed(2) + '</span></div>'
+        + '<div class="metric"><span class="label">会话数</span><span class="value">' + t.sessions + '</span></div>'
+        + '<div class="metric"><span class="label">均价</span><span class="value">$' + t.avg_cost_usd.toFixed(2) + '</span></div>'
+        + '<div class="metric"><span class="label">输出 token</span><span class="value">' + fmtTokens(t.output_tokens) + '</span></div>'
+        + '</div>';
+    }
+    cardsEl.innerHTML = ch;
+
+    // Session table
+    const el = document.getElementById('costsBody');
+    const sessions = report.sessions || [];
+    if (!sessions.length) { el.innerHTML = '<tr><td colspan="8" style="color:var(--dim);text-align:center;padding:20px">今日无会话</td></tr>'; return; }
+    let html = '';
+    for (const s of sessions) {
+      const tc = s.job_type === 'interactive' ? 'color:var(--purple)' : 'color:var(--blue)';
+      html += '<tr>'
+        + '<td>' + shortTime(s.started_at) + '</td>'
+        + '<td style="' + tc + ';font-weight:600">' + esc(s.job_type) + '</td>'
+        + '<td class="num">' + s.requests + '</td>'
+        + '<td class="num">' + fmtTokens(s.input_tokens) + '</td>'
+        + '<td class="num">' + fmtTokens(s.output_tokens) + '</td>'
+        + '<td class="num">' + fmtTokens(s.cache_write) + '</td>'
+        + '<td class="num">' + fmtTokens(s.cache_read) + '</td>'
+        + '<td class="num" style="color:var(--yellow);font-weight:600">$' + s.cost_usd.toFixed(2) + '</td>'
+        + '</tr>';
+    }
+    el.innerHTML = html;
+  } catch(e) { console.error('costs error', e); }
+}
+
+// --- Init ---
+refreshStatus();
+refreshJobs();
+setInterval(refreshStatus, 5000);
+setInterval(refreshJobs, 5000);
+</script>
+</body>
+</html>

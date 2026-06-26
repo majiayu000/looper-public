@@ -1,0 +1,21 @@
+looper
+*.exe
+.DS_Store
+
+# Runtime state
+logs/
+skills-lock.json
+
+# Local/private working data
+.env
+.env.*
+!.env.example
+.claude/
+.omx/
+drafts/
+data/
+eval/runs/
+
+# Python caches
+**/__pycache__/
+
