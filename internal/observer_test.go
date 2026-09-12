@@ -385,7 +385,7 @@ func TestObserverRunDisabled(t *testing.T) {
 
 func TestObserverRunWithValidToken(t *testing.T) {
 	runner := NewRunner(t.TempDir(), nil, nil)
-	done := make(chan struct{}, 2)
+	done := make(chan struct{}, 3)
 	scheduler := NewScheduler(runner, func(name string, result *RunResult, err error) {
 		done <- struct{}{}
 	})
@@ -406,6 +406,15 @@ func TestObserverRunWithValidToken(t *testing.T) {
 	obs.ConfigureRunEndpoint("secret-token", true)
 	handler := obs.Handler()
 
+	waitDone := func(label string) {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", label)
+		}
+	}
+
 	req := httptest.NewRequest("POST", "/run?job=demo_noop", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	w := httptest.NewRecorder()
@@ -420,6 +429,18 @@ func TestObserverRunWithValidToken(t *testing.T) {
 	if resp["status"] != "triggered" || resp["job"] != "demo_noop" {
 		t.Fatalf("unexpected response: %#v", resp)
 	}
+	// Serialize triggers: RunNow is async and skips already-running jobs.
+	waitDone("Bearer-triggered job")
+
+	// Scheme names are case-insensitive per HTTP auth.
+	req = httptest.NewRequest("POST", "/run?job=demo_noop", nil)
+	req.Header.Set("Authorization", "bearer secret-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("lowercase bearer: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	waitDone("lowercase-bearer-triggered job")
 
 	// X-Looper-Token header also accepted.
 	req = httptest.NewRequest("POST", "/run?job=demo_noop", nil)
@@ -429,15 +450,7 @@ func TestObserverRunWithValidToken(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("X-Looper-Token: expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-
-	// Wait for both background jobs so TempDir cleanup does not race exec.
-	for i := 0; i < 2; i++ {
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("timed out waiting for triggered job %d", i+1)
-		}
-	}
+	waitDone("X-Looper-Token-triggered job")
 }
 
 func TestObserverDashboardInjectsAuthToken(t *testing.T) {

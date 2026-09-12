@@ -192,9 +192,9 @@ func (o *Observer) handleRun(w http.ResponseWriter, r *http.Request) {
 
 func extractSharedToken(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
-		const prefix = "Bearer "
-		if strings.HasPrefix(auth, prefix) {
-			return strings.TrimSpace(auth[len(prefix):])
+		scheme, value, ok := strings.Cut(auth, " ")
+		if ok && strings.EqualFold(scheme, "Bearer") {
+			return strings.TrimSpace(value)
 		}
 	}
 	if token := strings.TrimSpace(r.Header.Get("X-Looper-Token")); token != "" {

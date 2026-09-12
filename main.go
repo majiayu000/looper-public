@@ -5,10 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -143,7 +145,7 @@ func observerListenAddr(listen string, port int) string {
 	if listen == "" {
 		listen = "127.0.0.1"
 	}
-	return fmt.Sprintf("%s:%d", listen, port)
+	return net.JoinHostPort(listen, strconv.Itoa(port))
 }
 
 func collectGlobalSkillDirs(cfg *internal.Config) []string {

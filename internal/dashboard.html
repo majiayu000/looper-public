@@ -427,7 +427,23 @@ async function runJob(name) {
   if (window.__LOOPER_AUTH_TOKEN__) {
     headers['Authorization'] = 'Bearer ' + window.__LOOPER_AUTH_TOKEN__;
   }
-  await fetch('/run?job=' + encodeURIComponent(name), { method: 'POST', headers: headers });
+  try {
+    const resp = await fetch('/run?job=' + encodeURIComponent(name), { method: 'POST', headers: headers });
+    if (!resp.ok) {
+      let detail = resp.status + ' ' + resp.statusText;
+      try {
+        const body = await resp.json();
+        if (body && body.error) detail = body.error;
+      } catch (_) {}
+      alert('Run failed: ' + detail);
+      refreshJobs();
+      return;
+    }
+  } catch (e) {
+    alert('Run failed: ' + (e && e.message ? e.message : e));
+    refreshJobs();
+    return;
+  }
   viewLog(name);
   refreshJobs();
 }

@@ -27,6 +27,9 @@ func TestObserverListenAddrDefaultsToLoopback(t *testing.T) {
 	if got := observerListenAddr("0.0.0.0", 8080); got != "0.0.0.0:8080" {
 		t.Fatalf("all-interfaces listen: got %q", got)
 	}
+	if got := observerListenAddr("::1", 5567); got != "[::1]:5567" {
+		t.Fatalf("ipv6 loopback listen: got %q", got)
+	}
 }
 
 func TestResolveConfigPathExpandsHome(t *testing.T) {
