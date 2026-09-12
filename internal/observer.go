@@ -102,13 +102,10 @@ func (o *Observer) Handler() http.Handler {
 
 func (o *Observer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	html := dashboardHTML
-	if token, _ := o.runEndpointConfig(); token != "" {
-		// Inject token for same-origin dashboard Run buttons (loopback-only by default).
-		inject := []byte(fmt.Sprintf(`<script>window.__LOOPER_AUTH_TOKEN__=%q;</script>`, token))
-		html = bytes.Replace(dashboardHTML, []byte("</head>"), append(inject, []byte("</head>")...), 1)
-	}
-	w.Write(html)
+	// Never embed the shared run token in GET / HTML. The dashboard stores the
+	// operator-provided token client-side (localStorage) so unauthenticated
+	// clients cannot harvest it when -listen is non-loopback.
+	w.Write(dashboardHTML)
 }
 
 func (o *Observer) handleJobs(w http.ResponseWriter, r *http.Request) {

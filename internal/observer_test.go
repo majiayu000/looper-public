@@ -453,7 +453,7 @@ func TestObserverRunWithValidToken(t *testing.T) {
 	waitDone("X-Looper-Token-triggered job")
 }
 
-func TestObserverDashboardInjectsAuthToken(t *testing.T) {
+func TestObserverDashboardDoesNotExposeAuthToken(t *testing.T) {
 	cfg := &Config{Platforms: map[string]PlatformConfig{}}
 	obs := NewObserver(cfg, nil, nil, time.Now())
 	obs.ConfigureRunEndpoint("dashboard-secret", true)
@@ -466,8 +466,14 @@ func TestObserverDashboardInjectsAuthToken(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `window.__LOOPER_AUTH_TOKEN__="dashboard-secret"`) {
-		t.Fatalf("expected auth token injection in dashboard HTML")
+	if strings.Contains(body, "dashboard-secret") {
+		t.Fatalf("dashboard HTML must not embed the shared auth token")
+	}
+	if strings.Contains(body, "__LOOPER_AUTH_TOKEN__") {
+		t.Fatalf("dashboard HTML must not inject server-side auth token globals")
+	}
+	if !strings.Contains(body, "looper_auth_token") {
+		t.Fatalf("expected dashboard to store operator token client-side")
 	}
 	if !strings.Contains(body, "Authorization") {
 		t.Fatalf("expected dashboard runJob to send Authorization header")

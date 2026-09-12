@@ -422,10 +422,44 @@ async function refreshJobs() {
   } catch(e) { console.error('jobs error', e); }
 }
 
-async function runJob(name) {
+const AUTH_TOKEN_KEY = 'looper_auth_token';
+
+function getStoredAuthToken() {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function setStoredAuthToken(token) {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (_) {}
+}
+
+function ensureAuthToken(forcePrompt) {
+  let token = getStoredAuthToken();
+  if (!token || forcePrompt) {
+    const entered = window.prompt(
+      forcePrompt
+        ? 'Auth rejected. Enter the LOOPER_AUTH_TOKEN for POST /run (stored in this browser only):'
+        : 'Enter the LOOPER_AUTH_TOKEN for POST /run (stored in this browser only):',
+      token || ''
+    );
+    if (entered === null) return '';
+    token = entered.trim();
+    setStoredAuthToken(token);
+  }
+  return token;
+}
+
+async function runJob(name, retried) {
   const headers = {};
-  if (window.__LOOPER_AUTH_TOKEN__) {
-    headers['Authorization'] = 'Bearer ' + window.__LOOPER_AUTH_TOKEN__;
+  const token = ensureAuthToken(!!retried);
+  if (token) {
+    headers['Authorization'] = 'Bearer ' + token;
   }
   try {
     const resp = await fetch('/run?job=' + encodeURIComponent(name), { method: 'POST', headers: headers });
@@ -435,6 +469,10 @@ async function runJob(name) {
         const body = await resp.json();
         if (body && body.error) detail = body.error;
       } catch (_) {}
+      if (resp.status === 401 && !retried) {
+        setStoredAuthToken('');
+        return runJob(name, true);
+      }
       alert('Run failed: ' + detail);
       refreshJobs();
       return;
