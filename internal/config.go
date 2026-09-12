@@ -142,6 +142,9 @@ func (c *Config) Validate() error {
 		if name == "" {
 			return fmt.Errorf("job name is required")
 		}
+		if !validJobName(name) {
+			return fmt.Errorf("job name %q is invalid: must be a single path segment without traversal", j.Name)
+		}
 		if seenJobs[name] {
 			return fmt.Errorf("duplicate job name %q", j.Name)
 		}

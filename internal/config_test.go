@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,5 +286,72 @@ scheduling:
 	}
 	if !strings.Contains(err.Error(), "duplicate job name") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidJobName(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name    string
+		jobName string
+	}{
+		{name: "path-separator", jobName: "reports/daily"},
+		{name: "dotdot", jobName: ".."},
+		{name: "backslash", jobName: `reports\daily`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".yaml")
+			content := fmt.Sprintf(`engines:
+  claude:
+    kind: claude
+    cli: claude
+    skills_dir: /tmp/skills
+scheduling:
+  jobs:
+    - name: %q
+      schedule: "@every 1m"
+      workdir: .
+      type: script
+      command: "echo 1"
+`, tc.jobName)
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write temp config: %v", err)
+			}
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatal("expected invalid job name validation error")
+			}
+			if !strings.Contains(err.Error(), "invalid") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigAllowsConsecutiveDotsInJobName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dots.yaml")
+	content := `engines:
+  claude:
+    kind: claude
+    cli: claude
+    skills_dir: /tmp/skills
+scheduling:
+  jobs:
+    - name: nightly..backup
+      schedule: "@every 1m"
+      workdir: .
+      type: script
+      command: "echo 1"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Scheduling.Jobs) != 1 || cfg.Scheduling.Jobs[0].Name != "nightly..backup" {
+		t.Fatalf("unexpected jobs: %+v", cfg.Scheduling.Jobs)
 	}
 }

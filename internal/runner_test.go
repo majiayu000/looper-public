@@ -229,9 +229,24 @@ func TestLogPathRejectsTraversal(t *testing.T) {
 		t.Fatalf("LogPath = %q, want %q", got, wantAbs)
 	}
 
+	// Consecutive dots within a single filename segment are safe.
+	dotsName := "nightly..backup"
+	gotDots, err := r.LogPath(dotsName)
+	if err != nil {
+		t.Fatalf("LogPath(%q): %v", dotsName, err)
+	}
+	wantDots, err := filepath.Abs(filepath.Join(logDir, dotsName+".log"))
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	if gotDots != filepath.Clean(wantDots) {
+		t.Fatalf("LogPath(%q) = %q, want %q", dotsName, gotDots, wantDots)
+	}
+
 	for _, name := range []string{
 		"../etc/passwd",
 		"..",
+		".",
 		"foo/bar",
 		"foo\\bar",
 		"a/../../b",

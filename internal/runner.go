@@ -59,12 +59,12 @@ func (r *Runner) engine(name string) (EngineConfig, bool) {
 	return e, ok
 }
 
-// validJobName reports whether jobName is a single path segment with no traversal.
+// validJobName reports whether jobName is a single path segment with no
+// traversal components. Consecutive dots inside a name (e.g. nightly..backup)
+// are allowed; only "." / ".." as the whole segment and path separators are
+// rejected. Callers also verify the resolved path stays under logDir.
 func validJobName(jobName string) bool {
 	if jobName == "" || jobName == "." || jobName == ".." {
-		return false
-	}
-	if strings.Contains(jobName, "..") {
 		return false
 	}
 	if strings.ContainsAny(jobName, `/\`) {
