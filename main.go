@@ -42,6 +42,7 @@ func main() {
 		"platforms", len(cfg.Platforms),
 		"jobs", len(cfg.Scheduling.Jobs),
 	)
+	warnIfLearningEnabled(cfg)
 
 	// Resolve workdir paths relative to config file directory
 	configDir := filepath.Dir(absConfig)
@@ -101,6 +102,7 @@ func main() {
 			slog.Error("config reload failed", "error", err)
 			return
 		}
+		warnIfLearningEnabled(currentCfg)
 		slog.Info("config reloaded",
 			"platforms", len(currentCfg.Platforms),
 			"jobs", len(currentCfg.Scheduling.Jobs),
@@ -121,6 +123,22 @@ func main() {
 
 	scheduler.Stop()
 	slog.Info("goodbye")
+}
+
+// warnIfLearningEnabled notices operators that learning.enabled has no runtime
+// effect. LearningConfig is kept for YAML compatibility only; no ranking or
+// weight updates are wired into scheduler, runner, or observer.
+func warnIfLearningEnabled(cfg *internal.Config) {
+	if cfg == nil || !cfg.Learning.Enabled {
+		return
+	}
+	slog.Warn("learning.enabled is set but learning is reserved/unimplemented; no ranking or weight updates will run",
+		"enabled", true,
+		"max_weight", cfg.Learning.Guardrails.MaxWeight,
+		"min_weight", cfg.Learning.Guardrails.MinWeight,
+		"max_daily_change", cfg.Learning.Guardrails.MaxDailyChange,
+		"min_samples", cfg.Learning.Guardrails.MinSamples,
+	)
 }
 
 func collectGlobalSkillDirs(cfg *internal.Config) []string {

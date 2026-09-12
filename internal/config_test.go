@@ -123,6 +123,9 @@ func TestLoadRealWorkflow(t *testing.T) {
 	if strings.TrimSpace(job.Command) == "" {
 		t.Fatal("example script job must set command")
 	}
+	if cfg.Learning.Enabled {
+		t.Fatal("public example must leave learning.enabled false (learning is reserved/unimplemented)")
+	}
 }
 
 func TestLoadConfigRejectsUnknownRunAfterSuccessTarget(t *testing.T) {
@@ -285,5 +288,77 @@ scheduling:
 	}
 	if !strings.Contains(err.Error(), "duplicate job name") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidLearningGuardrails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-learning.yaml")
+	content := `engines:
+  claude:
+    kind: claude
+    cli: claude
+    skills_dir: /tmp/skills
+scheduling:
+  jobs:
+    - name: ok
+      schedule: "@every 1m"
+      command: "echo ok"
+      workdir: .
+      type: script
+learning:
+  enabled: false
+  guardrails:
+    max_weight: 1.0
+    min_weight: 2.0
+    max_daily_change: 0.1
+    min_samples: 1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected config validation error for min_weight > max_weight")
+	}
+	if !strings.Contains(err.Error(), "min_weight") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigAcceptsLearningEnabledWithoutLearner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learning-enabled.yaml")
+	content := `engines:
+  claude:
+    kind: claude
+    cli: claude
+    skills_dir: /tmp/skills
+scheduling:
+  jobs:
+    - name: ok
+      schedule: "@every 1m"
+      command: "echo ok"
+      workdir: .
+      type: script
+learning:
+  enabled: true
+  guardrails:
+    max_weight: 3.0
+    min_weight: 0.3
+    max_daily_change: 0.2
+    min_samples: 5
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig should accept learning.enabled for YAML compatibility: %v", err)
+	}
+	if !cfg.Learning.Enabled {
+		t.Fatal("expected learning.enabled=true")
 	}
 }

@@ -40,6 +40,10 @@ Important fields:
 - `platforms`: optional metric sources backed by local SQLite databases.
 - `engines`: configured agent engines, such as `claude` or `codex`.
 - `scheduling.jobs`: cron entries for `script` or `skill` jobs.
+- `learning`: reserved / unimplemented. The schema is accepted for YAML
+  compatibility (`enabled` and weight guardrails), but Looper does not run a
+  ranking or weight learner. If `learning.enabled` is `true`, the process logs a
+  warning at startup and on config reload and otherwise ignores the block.
 
 Do not commit real credentials, cookies, private databases, generated drafts, or
 production account strategy. Keep those in local ignored files.

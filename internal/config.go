@@ -77,6 +77,8 @@ type PricingConfig struct {
 }
 
 type LearningConfig struct {
+	// Enabled is accepted for YAML compatibility. When true, Looper only logs a
+	// warning; no ranking or weight learner is implemented.
 	Enabled    bool            `yaml:"enabled"`
 	Guardrails GuardrailConfig `yaml:"guardrails"`
 }
@@ -207,7 +209,28 @@ func (c *Config) Validate() error {
 	if err := validateRunAfterSuccessCycles(c.Scheduling.Jobs); err != nil {
 		return err
 	}
+	if err := c.Learning.validate(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+// validate checks learning.guardrails bounds. Learning itself is reserved /
+// unimplemented; these checks only keep YAML values internally consistent.
+func (l LearningConfig) validate() error {
+	g := l.Guardrails
+	if g.MaxWeight != 0 || g.MinWeight != 0 {
+		if g.MinWeight > g.MaxWeight {
+			return fmt.Errorf("learning.guardrails: min_weight (%v) cannot exceed max_weight (%v)", g.MinWeight, g.MaxWeight)
+		}
+	}
+	if g.MaxDailyChange < 0 {
+		return fmt.Errorf("learning.guardrails: max_daily_change cannot be negative")
+	}
+	if g.MinSamples < 0 {
+		return fmt.Errorf("learning.guardrails: min_samples cannot be negative")
+	}
 	return nil
 }
 

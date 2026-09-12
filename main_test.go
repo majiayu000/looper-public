@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"looper/internal"
@@ -15,6 +18,37 @@ type fakeReloadObserver struct {
 
 func (f *fakeReloadObserver) UpdateConfig(cfg *internal.Config) {
 	f.cfg = cfg
+}
+
+func TestWarnIfLearningEnabled(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	warnIfLearningEnabled(&internal.Config{Learning: internal.LearningConfig{Enabled: false}})
+	if buf.Len() != 0 {
+		t.Fatalf("expected no warning when learning disabled, got %q", buf.String())
+	}
+
+	warnIfLearningEnabled(&internal.Config{
+		Learning: internal.LearningConfig{
+			Enabled: true,
+			Guardrails: internal.GuardrailConfig{
+				MaxWeight:      3,
+				MinWeight:      0.3,
+				MaxDailyChange: 0.2,
+				MinSamples:     5,
+			},
+		},
+	})
+	got := buf.String()
+	if !strings.Contains(got, "learning is reserved/unimplemented") {
+		t.Fatalf("expected reserved/unimplemented warning, got %q", got)
+	}
+	if !strings.Contains(got, "enabled=true") {
+		t.Fatalf("expected enabled=true in warning, got %q", got)
+	}
 }
 
 func TestResolveConfigPathExpandsHome(t *testing.T) {

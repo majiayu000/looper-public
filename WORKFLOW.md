@@ -40,6 +40,8 @@ scheduling:
       type: script
       timeout: 10s
 
+# learning is reserved/unimplemented. Fields are kept for YAML compatibility.
+# Setting enabled: true only logs a warning; no ranking or weight updates run.
 learning:
   enabled: false
   guardrails:
@@ -54,4 +56,11 @@ learning:
 This Markdown file carries YAML front matter read by Looper. Keep private
 credentials, cookies, real account strategy, and local production database paths
 out of version control.
+
+## Learning (reserved)
+
+The `learning:` block is parsed for forward compatibility but is not implemented.
+Looper does not adjust job ranking or weights from these fields. Leave
+`learning.enabled` false unless you are intentionally exercising the startup
+warning path.
 
