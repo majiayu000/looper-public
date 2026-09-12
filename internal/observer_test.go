@@ -3,6 +3,7 @@ package internal
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,6 +116,11 @@ func TestObserverHealth(t *testing.T) {
 
 func setupPublishedItemTestDB(t *testing.T) string {
 	t.Helper()
+	return setupPublishedItemTestDBNamed(t, "published_item_tracking")
+}
+
+func setupPublishedItemTestDBNamed(t *testing.T, table string) string {
+	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -123,8 +129,8 @@ func setupPublishedItemTestDB(t *testing.T) string {
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(`
-		CREATE TABLE published_item_tracking (
+	if _, err := db.Exec(fmt.Sprintf(`
+		CREATE TABLE %s (
 			reply_id TEXT,
 			parent_id TEXT,
 			author TEXT,
@@ -142,11 +148,11 @@ func setupPublishedItemTestDB(t *testing.T) string {
 			check_stage TEXT,
 			last_checked_at TEXT
 		)
-	`); err != nil {
+	`, table)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`
-		INSERT INTO published_item_tracking (
+	if _, err := db.Exec(fmt.Sprintf(`
+		INSERT INTO %s (
 			reply_id, parent_id, author, skeleton, reply_style, score,
 			selection_score, candidate_vr, likes, views, target_likes,
 			target_views, type, posted_at, check_stage, last_checked_at
@@ -155,7 +161,7 @@ func setupPublishedItemTestDB(t *testing.T) string {
 			8.5, 10.683506096350133, 1, 2, 3, 4, 'reply',
 			datetime('now', 'localtime'), 'early', datetime('now', 'localtime')
 		)
-	`); err != nil {
+	`, table)); err != nil {
 		t.Fatal(err)
 	}
 	return dbPath
@@ -218,6 +224,90 @@ func TestObserverTrackingHandlesFloatCandidateVR(t *testing.T) {
 	row := items[0].(map[string]any)
 	if got := row["candidate_vr"]; got != 10.683506096350133 {
 		t.Fatalf("candidate_vr mismatch: %#v", got)
+	}
+}
+
+func TestObserverRepliesUsesConfiguredPublishedItemsTable(t *testing.T) {
+	const customTable = "custom_published_items"
+	dbPath := setupPublishedItemTestDBNamed(t, customTable)
+	cfg := &Config{
+		Platforms: map[string]PlatformConfig{
+			"test_platform": {
+				Enabled: true,
+				DB:      dbPath,
+				Metrics: MetricsConfig{PublishedItemsTable: customTable},
+			},
+		},
+	}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+
+	req := httptest.NewRequest("GET", "/api/replies?platform=test_platform", nil)
+	w := httptest.NewRecorder()
+	obs.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp paginatedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	items, ok := resp.Data.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected one reply row from custom table, got %#v", resp.Data)
+	}
+}
+
+func TestObserverTrackingUsesConfiguredPublishedItemsTable(t *testing.T) {
+	const customTable = "custom_published_items"
+	dbPath := setupPublishedItemTestDBNamed(t, customTable)
+	cfg := &Config{
+		Platforms: map[string]PlatformConfig{
+			"test_platform": {
+				Enabled: true,
+				DB:      dbPath,
+				Metrics: MetricsConfig{PublishedItemsTable: customTable},
+			},
+		},
+	}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+
+	req := httptest.NewRequest("GET", "/api/tracking?platform=test_platform", nil)
+	w := httptest.NewRecorder()
+	obs.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp paginatedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	items, ok := resp.Data.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected one tracking row from custom table, got %#v", resp.Data)
+	}
+}
+
+func TestValidateMetricsConfigRejectsInvalidPublishedItemsTable(t *testing.T) {
+	err := validateMetricsConfig(MetricsConfig{
+		PublishedItemsTable: "bad-table;drop",
+	})
+	if err == nil {
+		t.Fatal("expected invalid PublishedItemsTable to be rejected")
+	}
+	if !strings.Contains(err.Error(), "invalid SQL identifier") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPublishedItemsTableFallsBackToDefault(t *testing.T) {
+	table, err := publishedItemsTable(MetricsConfig{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if table != defaultPublishedItemsTable {
+		t.Fatalf("expected default %q, got %q", defaultPublishedItemsTable, table)
 	}
 }
 

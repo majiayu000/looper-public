@@ -336,18 +336,29 @@ func (o *Observer) handleReplies(w http.ResponseWriter, r *http.Request) {
 	}
 	defer db.Close()
 
+	metrics, err := o.platformMetrics(platform)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	table, err := publishedItemsTable(metrics)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	pp := parsePage(r)
 	today := time.Now().Format("2006-01-02")
 
 	var total int
-	db.QueryRow("SELECT COUNT(*) FROM published_item_tracking WHERE date(posted_at) = ?", today).Scan(&total)
+	db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE date(posted_at) = ?", table), today).Scan(&total)
 
 	selectionScoreExpr := "NULL AS selection_score"
-	if platformHasColumn(db, "published_item_tracking", "selection_score") {
+	if platformHasColumn(db, table, "selection_score") {
 		selectionScoreExpr = "selection_score"
 	}
 	candidateVRExpr := "NULL AS candidate_vr"
-	if platformHasColumn(db, "published_item_tracking", "candidate_vr") {
+	if platformHasColumn(db, table, "candidate_vr") {
 		candidateVRExpr = "candidate_vr"
 	}
 
@@ -355,11 +366,11 @@ func (o *Observer) handleReplies(w http.ResponseWriter, r *http.Request) {
 		SELECT reply_id, parent_id, author, skeleton, reply_style,
 		       score, %s, %s, likes, views, target_likes, target_views,
 		       type, posted_at
-		FROM published_item_tracking
+		FROM %s
 		WHERE date(posted_at) = ?
 		ORDER BY posted_at DESC
 		LIMIT ? OFFSET ?
-	`, selectionScoreExpr, candidateVRExpr)
+	`, selectionScoreExpr, candidateVRExpr, table)
 
 	rows, err := db.Query(replyQuery, today, pp.PerPage, pp.Offset)
 	if err != nil {
@@ -563,17 +574,28 @@ func (o *Observer) handleTracking(w http.ResponseWriter, r *http.Request) {
 	}
 	defer db.Close()
 
+	metrics, err := o.platformMetrics(platform)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	table, err := publishedItemsTable(metrics)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	pp := parsePage(r)
 
 	var total int
-	db.QueryRow("SELECT COUNT(*) FROM published_item_tracking WHERE likes > 0 OR views > 0").Scan(&total)
+	db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE likes > 0 OR views > 0", table)).Scan(&total)
 
 	selectionScoreExpr := "NULL AS selection_score"
-	if platformHasColumn(db, "published_item_tracking", "selection_score") {
+	if platformHasColumn(db, table, "selection_score") {
 		selectionScoreExpr = "selection_score"
 	}
 	candidateVRExpr := "NULL AS candidate_vr"
-	if platformHasColumn(db, "published_item_tracking", "candidate_vr") {
+	if platformHasColumn(db, table, "candidate_vr") {
 		candidateVRExpr = "candidate_vr"
 	}
 
@@ -581,11 +603,11 @@ func (o *Observer) handleTracking(w http.ResponseWriter, r *http.Request) {
 		SELECT reply_id, parent_id, author, skeleton, reply_style,
 		       score, %s, %s, likes, views, target_likes, target_views,
 		       type, posted_at, check_stage, last_checked_at
-		FROM published_item_tracking
+		FROM %s
 		WHERE likes > 0 OR views > 0
 		ORDER BY views DESC, likes DESC
 		LIMIT ? OFFSET ?
-	`, selectionScoreExpr, candidateVRExpr)
+	`, selectionScoreExpr, candidateVRExpr, table)
 
 	rows, err := db.Query(trackingQuery, pp.PerPage, pp.Offset)
 	if err != nil {
@@ -826,6 +848,7 @@ func validateMetricsConfig(m MetricsConfig) error {
 	identifiers := []string{
 		m.CandidateBacklogTable, m.CandidateBacklogStatusField,
 		m.ActionTable, m.ActionTypeField, m.ActionTimeField,
+		m.PublishedItemsTable,
 	}
 	for _, id := range identifiers {
 		if id != "" {
@@ -835,6 +858,30 @@ func validateMetricsConfig(m MetricsConfig) error {
 		}
 	}
 	return nil
+}
+
+const defaultPublishedItemsTable = "published_item_tracking"
+
+// publishedItemsTable returns the configured published-items table name, or the
+// historical default when Metrics.PublishedItemsTable is empty.
+func publishedItemsTable(m MetricsConfig) (string, error) {
+	table := m.PublishedItemsTable
+	if table == "" {
+		table = defaultPublishedItemsTable
+	}
+	if err := validateIdentifier(table); err != nil {
+		return "", err
+	}
+	return table, nil
+}
+
+func (o *Observer) platformMetrics(platform string) (MetricsConfig, error) {
+	cfg := o.getConfig()
+	p, ok := cfg.Platforms[platform]
+	if !ok {
+		return MetricsConfig{}, fmt.Errorf("platform %q not found", platform)
+	}
+	return p.Metrics, nil
 }
 
 func (o *Observer) queryPlatformMetrics(name string, p PlatformConfig) PlatformStatus {
