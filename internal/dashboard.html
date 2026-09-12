@@ -234,6 +234,16 @@ async function fetchJSON(url) {
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// Escape for use inside double-quoted HTML attributes (esc() alone leaves " intact).
+function escAttr(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function parseDbTime(ts) {
   if (!ts) return null;
   const raw = String(ts).trim();
@@ -542,7 +552,7 @@ async function refreshReplies(pg) {
     let html = '';
     for (const r of data) {
       const scoreText = formatReplyScore(r);
-      const scoreTip = esc(replyScoreTooltip(r));
+      const scoreTip = escAttr(replyScoreTooltip(r));
       html += '<tr>'
         + '<td>' + shortTime(r.posted_at) + '</td>'
         + '<td class="author">' + esc(r.author) + '</td>'
@@ -575,7 +585,7 @@ async function refreshCandidateBacklog(pg) {
       html += '<tr>'
         + '<td class="num score">' + q.score.toFixed(1) + '</td>'
         + '<td class="author">' + esc(q.author) + '</td>'
-        + '<td class="text-preview" title="' + esc(q.text) + '">' + esc(q.text) + '</td>'
+        + '<td class="text-preview" title="' + escAttr(q.text) + '">' + esc(q.text) + '</td>'
         + '<td class="num">' + q.likes + '</td>'
         + '<td class="num">' + q.views + '</td>'
         + '<td>' + shortTime(q.discovered_at) + '</td>'
@@ -602,8 +612,8 @@ async function refreshReplyReviews(pg) {
         + '<td class="num">' + q.id + '</td>'
         + '<td><span class="badge badge-' + (q.status === 'approved' ? 'running' : 'idle') + '">' + esc(q.status) + '</span></td>'
         + '<td class="author">' + esc(q.author) + '</td>'
-        + '<td class="text-preview" title="' + esc(q.parent_text) + '">' + esc(q.parent_text) + '</td>'
-        + '<td class="text-preview" title="' + esc(q.reply_text) + '">' + esc(q.reply_text) + '</td>'
+        + '<td class="text-preview" title="' + escAttr(q.parent_text) + '">' + esc(q.parent_text) + '</td>'
+        + '<td class="text-preview" title="' + escAttr(q.reply_text) + '">' + esc(q.reply_text) + '</td>'
         + '<td>' + esc(reviewer) + '</td>'
         + '<td>' + shortTime(q.created_at) + '</td>'
         + '<td><a class="tweet-link" href="' + tweetUrl(q.parent_id) + '" target="_blank">parent</a></td>'

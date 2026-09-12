@@ -32,6 +32,44 @@ func TestObserverListenAddrDefaultsToLoopback(t *testing.T) {
 	}
 }
 
+func TestValidateCleartextAuthBind(t *testing.T) {
+	if err := validateCleartextAuthBind("0.0.0.0", "", false); err != nil {
+		t.Fatalf("no auth should allow remote cleartext: %v", err)
+	}
+	if err := validateCleartextAuthBind("127.0.0.1", "secret", false); err != nil {
+		t.Fatalf("loopback with auth should be allowed: %v", err)
+	}
+	if err := validateCleartextAuthBind("::1", "secret", false); err != nil {
+		t.Fatalf("ipv6 loopback with auth should be allowed: %v", err)
+	}
+	if err := validateCleartextAuthBind("localhost", "secret", false); err != nil {
+		t.Fatalf("localhost with auth should be allowed: %v", err)
+	}
+	if err := validateCleartextAuthBind("0.0.0.0", "secret", false); err == nil {
+		t.Fatal("expected refusal for remote cleartext auth")
+	}
+	if err := validateCleartextAuthBind("0.0.0.0", "secret", true); err != nil {
+		t.Fatalf("explicit allow should permit remote cleartext auth: %v", err)
+	}
+}
+
+func TestIsLoopbackListen(t *testing.T) {
+	cases := map[string]bool{
+		"":          true,
+		"127.0.0.1": true,
+		"::1":       true,
+		"localhost": true,
+		"0.0.0.0":   false,
+		"::":        false,
+		"192.0.2.1": false,
+	}
+	for host, want := range cases {
+		if got := isLoopbackListen(host); got != want {
+			t.Fatalf("isLoopbackListen(%q)=%v want %v", host, got, want)
+		}
+	}
+}
+
 func TestResolveConfigPathExpandsHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {

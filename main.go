@@ -20,19 +20,22 @@ import (
 
 func main() {
 	var (
-		configPath string
-		listen     string
-		port       int
-		authToken  string
-		enableRun  bool
+		configPath          string
+		listen              string
+		port                int
+		authToken           string
+		enableRun           bool
+		allowInsecureRemote bool
 	)
 	flag.StringVar(&configPath, "config", "WORKFLOW.md", "path to WORKFLOW.md config")
-	flag.StringVar(&listen, "listen", "127.0.0.1", "HTTP observer bind address (use 0.0.0.0 to expose on all interfaces)")
+	flag.StringVar(&listen, "listen", "127.0.0.1", "HTTP observer bind address (use 0.0.0.0 only behind TLS termination; requires -allow-insecure-remote with auth)")
 	flag.IntVar(&port, "port", 5567, "HTTP observer port")
 	flag.StringVar(&authToken, "auth-token", "", "shared secret required for POST /run (or set LOOPER_AUTH_TOKEN)")
 	flag.BoolVar(&enableRun, "enable-run", true, "allow POST /run when an auth token is configured")
+	flag.BoolVar(&allowInsecureRemote, "allow-insecure-remote", false, "permit cleartext HTTP with auth on a non-loopback -listen (prefer TLS reverse proxy to loopback)")
 	flag.Parse()
 
+	authToken = strings.TrimSpace(authToken)
 	if authToken == "" {
 		authToken = strings.TrimSpace(os.Getenv("LOOPER_AUTH_TOKEN"))
 	}
@@ -97,6 +100,10 @@ func main() {
 	if enableRun && authToken == "" {
 		slog.Warn("POST /run is enabled but no auth token is set; requests will be rejected until -auth-token or LOOPER_AUTH_TOKEN is configured")
 	}
+	if err := validateCleartextAuthBind(listen, authToken, allowInsecureRemote); err != nil {
+		slog.Error("unsafe observer bind", "error", err)
+		os.Exit(1)
+	}
 	go func() {
 		addr := observerListenAddr(listen, port)
 		slog.Info("observer listening", "addr", addr, "enable_run", enableRun, "auth_required", authToken != "")
@@ -146,6 +153,28 @@ func observerListenAddr(listen string, port int) string {
 		listen = "127.0.0.1"
 	}
 	return net.JoinHostPort(listen, strconv.Itoa(port))
+}
+
+// isLoopbackListen reports whether host is a loopback bind suitable for cleartext auth.
+func isLoopbackListen(listen string) bool {
+	listen = strings.TrimSpace(listen)
+	if listen == "" {
+		return true
+	}
+	if strings.EqualFold(listen, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(listen)
+	return ip != nil && ip.IsLoopback()
+}
+
+// validateCleartextAuthBind refuses non-loopback cleartext HTTP when a Bearer token
+// would be sent over the wire, unless the operator explicitly opts in.
+func validateCleartextAuthBind(listen, authToken string, allowInsecureRemote bool) error {
+	if authToken == "" || isLoopbackListen(listen) || allowInsecureRemote {
+		return nil
+	}
+	return fmt.Errorf("refusing cleartext auth on non-loopback -listen %q: bind 127.0.0.1 behind a TLS reverse proxy, or pass -allow-insecure-remote", strings.TrimSpace(listen))
 }
 
 func collectGlobalSkillDirs(cfg *internal.Config) []string {

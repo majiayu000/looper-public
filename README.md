@@ -28,12 +28,15 @@ export LOOPER_AUTH_TOKEN='replace-me'
 
 Open `http://127.0.0.1:5567/health` to confirm the process is running.
 
-The HTTP observer binds to `127.0.0.1` by default. Use `-listen 0.0.0.0` only when you
-intentionally need a non-loopback bind. Prefer `LOOPER_AUTH_TOKEN` over `-auth-token` so
+The HTTP observer binds to `127.0.0.1` by default. Prefer `LOOPER_AUTH_TOKEN` over `-auth-token` so
 the secret is not visible in process argument listings. `POST /run` requires that shared
 token (`Authorization: Bearer …` or `X-Looper-Token`). Disable manual runs with
 `-enable-run=false`. The dashboard never embeds the token in HTML; enter it once in the
 browser (stored in `localStorage`) when using Run.
+
+Cleartext auth on a non-loopback `-listen` is refused. For remote access, terminate TLS on a
+reverse proxy and forward to loopback, or pass `-allow-insecure-remote` only when you
+accept that risk.
 
 The included `WORKFLOW.md` is a no-op example. Replace it with your own local
 workflow before running real jobs.
