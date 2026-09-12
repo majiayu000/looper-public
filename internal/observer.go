@@ -291,13 +291,28 @@ func (o *Observer) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 // --- Platform-specific data APIs ---
 
-func (o *Observer) openPlatformDB(platform string) (*sql.DB, error) {
+// lookupPlatform returns one PlatformConfig snapshot from the current config.
+// Callers that need both the database path and metrics fields must use this
+// single snapshot so a hot-reload cannot mix values across reads.
+func (o *Observer) lookupPlatform(platform string) (PlatformConfig, error) {
 	cfg := o.getConfig()
 	p, ok := cfg.Platforms[platform]
 	if !ok {
-		return nil, fmt.Errorf("platform %q not found", platform)
+		return PlatformConfig{}, fmt.Errorf("platform %q not found", platform)
 	}
-	return sql.Open("sqlite", p.DB+"?mode=ro")
+	return p, nil
+}
+
+func openSQLiteRO(dbPath string) (*sql.DB, error) {
+	return sql.Open("sqlite", dbPath+"?mode=ro")
+}
+
+func (o *Observer) openPlatformDB(platform string) (*sql.DB, error) {
+	p, err := o.lookupPlatform(platform)
+	if err != nil {
+		return nil, err
+	}
+	return openSQLiteRO(p.DB)
 }
 
 func platformHasColumn(db *sql.DB, table, column string) bool {
@@ -329,19 +344,19 @@ func (o *Observer) handleReplies(w http.ResponseWriter, r *http.Request) {
 	if platform == "" {
 		platform = "x"
 	}
-	db, err := o.openPlatformDB(platform)
+	p, err := o.lookupPlatform(platform)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	db, err := openSQLiteRO(p.DB)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	defer db.Close()
 
-	metrics, err := o.platformMetrics(platform)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	table, err := publishedItemsTable(metrics)
+	table, err := publishedItemsTable(p.Metrics)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -567,19 +582,19 @@ func (o *Observer) handleTracking(w http.ResponseWriter, r *http.Request) {
 	if platform == "" {
 		platform = "x"
 	}
-	db, err := o.openPlatformDB(platform)
+	p, err := o.lookupPlatform(platform)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	db, err := openSQLiteRO(p.DB)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	defer db.Close()
 
-	metrics, err := o.platformMetrics(platform)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	table, err := publishedItemsTable(metrics)
+	table, err := publishedItemsTable(p.Metrics)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -876,10 +891,9 @@ func publishedItemsTable(m MetricsConfig) (string, error) {
 }
 
 func (o *Observer) platformMetrics(platform string) (MetricsConfig, error) {
-	cfg := o.getConfig()
-	p, ok := cfg.Platforms[platform]
-	if !ok {
-		return MetricsConfig{}, fmt.Errorf("platform %q not found", platform)
+	p, err := o.lookupPlatform(platform)
+	if err != nil {
+		return MetricsConfig{}, err
 	}
 	return p.Metrics, nil
 }

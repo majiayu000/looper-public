@@ -258,6 +258,64 @@ func TestObserverRepliesUsesConfiguredPublishedItemsTable(t *testing.T) {
 	}
 }
 
+func TestLookupPlatformSnapshotUnaffectedByUpdateConfig(t *testing.T) {
+	const customTable = "custom_published_items"
+	dbPath := setupPublishedItemTestDBNamed(t, customTable)
+	cfg := &Config{
+		Platforms: map[string]PlatformConfig{
+			"test_platform": {
+				Enabled: true,
+				DB:      dbPath,
+				Metrics: MetricsConfig{PublishedItemsTable: customTable},
+			},
+		},
+	}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+
+	snap, err := obs.lookupPlatform("test_platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate WORKFLOW.md hot-reload changing both DB path and table together.
+	obs.UpdateConfig(&Config{
+		Platforms: map[string]PlatformConfig{
+			"test_platform": {
+				Enabled: true,
+				DB:      filepath.Join(t.TempDir(), "missing.db"),
+				Metrics: MetricsConfig{PublishedItemsTable: "other_table"},
+			},
+		},
+	})
+
+	if snap.DB != dbPath {
+		t.Fatalf("snapshot DB path mutated after UpdateConfig: %q", snap.DB)
+	}
+	if snap.Metrics.PublishedItemsTable != customTable {
+		t.Fatalf("snapshot metrics mutated after UpdateConfig: %#v", snap.Metrics)
+	}
+	table, err := publishedItemsTable(snap.Metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table != customTable {
+		t.Fatalf("expected table %q from snapshot, got %q", customTable, table)
+	}
+
+	db, err := openSQLiteRO(snap.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count); err != nil {
+		t.Fatalf("snapshot DB+table query failed after hot-reload: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row from snapshot, got %d", count)
+	}
+}
+
 func TestObserverTrackingUsesConfiguredPublishedItemsTable(t *testing.T) {
 	const customTable = "custom_published_items"
 	dbPath := setupPublishedItemTestDBNamed(t, customTable)
