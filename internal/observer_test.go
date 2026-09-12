@@ -330,3 +330,94 @@ func TestFilterNDJSONCodex(t *testing.T) {
 		t.Fatalf("expected final Codex text in summary, got: %q", out)
 	}
 }
+
+func setupObserverLogsFixture(t *testing.T) (*Observer, http.Handler, string) {
+	t.Helper()
+	logDir := t.TempDir()
+	runner := NewRunner(logDir, nil, nil)
+	scheduler := NewScheduler(runner, nil)
+	if err := scheduler.Load([]JobConfig{
+		{Name: "demo_job", Schedule: "@every 1h", Command: "echo ok", Workdir: ".", Type: "script"},
+	}); err != nil {
+		t.Fatalf("Load jobs: %v", err)
+	}
+	logPath, err := runner.LogPath("demo_job")
+	if err != nil {
+		t.Fatalf("LogPath: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("demo log line\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	obs := NewObserver(&Config{}, scheduler, runner, time.Now())
+	return obs, obs.Handler(), logDir
+}
+
+func TestObserverLogsRegisteredJob(t *testing.T) {
+	_, handler, _ := setupObserverLogsFixture(t)
+
+	req := httptest.NewRequest("GET", "/logs?job=demo_job", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); !strings.Contains(got, "demo log line") {
+		t.Fatalf("expected log body, got %q", got)
+	}
+}
+
+func TestObserverLogsUnknownJob(t *testing.T) {
+	_, handler, _ := setupObserverLogsFixture(t)
+
+	req := httptest.NewRequest("GET", "/logs?job=missing_job", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if resp["error"] == nil {
+		t.Fatalf("expected error field, got %#v", resp)
+	}
+	jobs, ok := resp["jobs"].([]any)
+	if !ok || len(jobs) != 1 || jobs[0] != "demo_job" {
+		t.Fatalf("expected jobs allowlist in response, got %#v", resp["jobs"])
+	}
+}
+
+func TestObserverLogsPathTraversal(t *testing.T) {
+	_, handler, logDir := setupObserverLogsFixture(t)
+
+	// Place a file outside logDir that would be reachable via naive Join cleaning.
+	outside := filepath.Join(filepath.Dir(logDir), "secret.log")
+	if err := os.WriteFile(outside, []byte("SECRET\n"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	payloads := []string{
+		"../" + filepath.Base(filepath.Dir(logDir)) + "/secret",
+		"../../etc/passwd",
+		"..\\..\\etc\\passwd",
+		"foo/../../etc/passwd",
+		filepath.Join("..", "secret"),
+	}
+	for _, job := range payloads {
+		req := httptest.NewRequest("GET", "/logs?job="+job, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code == http.StatusOK {
+			t.Fatalf("traversal payload %q unexpectedly succeeded: %s", job, w.Body.String())
+		}
+		if w.Code != http.StatusBadRequest && w.Code != http.StatusNotFound {
+			t.Fatalf("traversal payload %q: expected 400/404, got %d: %s", job, w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "SECRET") {
+			t.Fatalf("traversal payload %q leaked outside file contents", job)
+		}
+	}
+}

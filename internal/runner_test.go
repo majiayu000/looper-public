@@ -211,3 +211,34 @@ func TestBuildSkillCommandCodexBypassSkipsSandbox(t *testing.T) {
 		t.Fatalf("dangerous bypass should not also pass sandbox: %s", cmd)
 	}
 }
+
+func TestLogPathRejectsTraversal(t *testing.T) {
+	logDir := t.TempDir()
+	r := NewRunner(logDir, nil, nil)
+
+	got, err := r.LogPath("demo_job")
+	if err != nil {
+		t.Fatalf("LogPath(demo_job): %v", err)
+	}
+	want := filepath.Join(logDir, "demo_job.log")
+	wantAbs, err := filepath.Abs(want)
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	if got != filepath.Clean(wantAbs) {
+		t.Fatalf("LogPath = %q, want %q", got, wantAbs)
+	}
+
+	for _, name := range []string{
+		"../etc/passwd",
+		"..",
+		"foo/bar",
+		"foo\\bar",
+		"a/../../b",
+		"",
+	} {
+		if _, err := r.LogPath(name); err == nil {
+			t.Fatalf("LogPath(%q) unexpectedly succeeded", name)
+		}
+	}
+}

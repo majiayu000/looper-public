@@ -59,9 +59,48 @@ func (r *Runner) engine(name string) (EngineConfig, bool) {
 	return e, ok
 }
 
-// LogPath returns the log file path for a job.
-func (r *Runner) LogPath(jobName string) string {
-	return filepath.Join(r.logDir, jobName+".log")
+// validJobName reports whether jobName is a single path segment with no traversal.
+func validJobName(jobName string) bool {
+	if jobName == "" || jobName == "." || jobName == ".." {
+		return false
+	}
+	if strings.Contains(jobName, "..") {
+		return false
+	}
+	if strings.ContainsAny(jobName, `/\`) {
+		return false
+	}
+	if filepath.Base(jobName) != jobName {
+		return false
+	}
+	return true
+}
+
+// LogPath returns the log file path for a job, rejecting names or resolved
+// paths that escape the configured log directory.
+func (r *Runner) LogPath(jobName string) (string, error) {
+	if !validJobName(jobName) {
+		return "", fmt.Errorf("invalid job name %q", jobName)
+	}
+
+	logDir, err := filepath.Abs(r.logDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve log dir: %w", err)
+	}
+	logDir = filepath.Clean(logDir)
+
+	candidate := filepath.Join(logDir, jobName+".log")
+	resolved, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve log path: %w", err)
+	}
+	resolved = filepath.Clean(resolved)
+
+	rel, err := filepath.Rel(logDir, resolved)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("log path escapes log directory")
+	}
+	return resolved, nil
 }
 
 func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
@@ -94,7 +133,10 @@ func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
 	}
 	cmd.WaitDelay = 2 * time.Second
 
-	logPath := r.LogPath(job.Name)
+	logPath, err := r.LogPath(job.Name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve log path for job %s: %w", job.Name, err)
+	}
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("create log file %s: %w", logPath, err)

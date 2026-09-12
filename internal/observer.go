@@ -248,6 +248,26 @@ func filterNDJSON(data []byte) []byte {
 	return buf
 }
 
+func (o *Observer) writeLogsJobError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"error": msg,
+		"jobs":  o.scheduler.JobNames(),
+	}); err != nil {
+		slog.Error("encode logs error response", "error", err)
+	}
+}
+
+func (o *Observer) isRegisteredJob(jobName string) bool {
+	for _, name := range o.scheduler.JobNames() {
+		if name == jobName {
+			return true
+		}
+	}
+	return false
+}
+
 func (o *Observer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	jobName := r.URL.Query().Get("job")
 	if jobName == "" || o.runner == nil {
@@ -261,7 +281,21 @@ func (o *Observer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logPath := o.runner.LogPath(jobName)
+	// Reject traversal / path separators before any filesystem access.
+	if !validJobName(jobName) {
+		o.writeLogsJobError(w, http.StatusBadRequest, "invalid job name")
+		return
+	}
+	if !o.isRegisteredJob(jobName) {
+		o.writeLogsJobError(w, http.StatusNotFound, fmt.Sprintf("job not found: %s", jobName))
+		return
+	}
+
+	logPath, err := o.runner.LogPath(jobName)
+	if err != nil {
+		o.writeLogsJobError(w, http.StatusBadRequest, "invalid job name")
+		return
+	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
