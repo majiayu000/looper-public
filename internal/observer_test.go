@@ -330,3 +330,133 @@ func TestFilterNDJSONCodex(t *testing.T) {
 		t.Fatalf("expected final Codex text in summary, got: %q", out)
 	}
 }
+
+func TestObserverRunRequiresAuthToken(t *testing.T) {
+	cfg := &Config{Platforms: map[string]PlatformConfig{}}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+	obs.ConfigureRunEndpoint("secret-token", true)
+	handler := obs.Handler()
+
+	// Missing token must 401 and must not reach scheduler (nil would panic).
+	req := httptest.NewRequest("POST", "/run?job=demo", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: expected 401, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("POST", "/run?job=demo", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid token: expected 401, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestObserverRunEmptyTokenRejects(t *testing.T) {
+	cfg := &Config{Platforms: map[string]PlatformConfig{}}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+	// Default enableRun=true but no token configured → fail closed.
+	handler := obs.Handler()
+
+	req := httptest.NewRequest("POST", "/run?job=demo", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when no token configured, got %d", w.Code)
+	}
+}
+
+func TestObserverRunDisabled(t *testing.T) {
+	cfg := &Config{Platforms: map[string]PlatformConfig{}}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+	obs.ConfigureRunEndpoint("secret-token", false)
+	handler := obs.Handler()
+
+	req := httptest.NewRequest("POST", "/run?job=demo", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when enable-run=false, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestObserverRunWithValidToken(t *testing.T) {
+	runner := NewRunner(t.TempDir(), nil, nil)
+	done := make(chan struct{}, 2)
+	scheduler := NewScheduler(runner, func(name string, result *RunResult, err error) {
+		done <- struct{}{}
+	})
+	workdir := t.TempDir()
+	if err := scheduler.Load([]JobConfig{{
+		Name:     "demo_noop",
+		Schedule: "@every 24h",
+		Type:     "script",
+		Command:  "true",
+		Workdir:  workdir,
+		Timeout:  "5s",
+	}}); err != nil {
+		t.Fatalf("load jobs: %v", err)
+	}
+
+	cfg := &Config{Platforms: map[string]PlatformConfig{}}
+	obs := NewObserver(cfg, scheduler, runner, time.Now())
+	obs.ConfigureRunEndpoint("secret-token", true)
+	handler := obs.Handler()
+
+	req := httptest.NewRequest("POST", "/run?job=demo_noop", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if resp["status"] != "triggered" || resp["job"] != "demo_noop" {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+
+	// X-Looper-Token header also accepted.
+	req = httptest.NewRequest("POST", "/run?job=demo_noop", nil)
+	req.Header.Set("X-Looper-Token", "secret-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("X-Looper-Token: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// Wait for both background jobs so TempDir cleanup does not race exec.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for triggered job %d", i+1)
+		}
+	}
+}
+
+func TestObserverDashboardInjectsAuthToken(t *testing.T) {
+	cfg := &Config{Platforms: map[string]PlatformConfig{}}
+	obs := NewObserver(cfg, nil, nil, time.Now())
+	obs.ConfigureRunEndpoint("dashboard-secret", true)
+	handler := obs.Handler()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `window.__LOOPER_AUTH_TOKEN__="dashboard-secret"`) {
+		t.Fatalf("expected auth token injection in dashboard HTML")
+	}
+	if !strings.Contains(body, "Authorization") {
+		t.Fatalf("expected dashboard runJob to send Authorization header")
+	}
+}

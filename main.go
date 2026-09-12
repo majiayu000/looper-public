@@ -19,11 +19,21 @@ import (
 func main() {
 	var (
 		configPath string
+		listen     string
 		port       int
+		authToken  string
+		enableRun  bool
 	)
 	flag.StringVar(&configPath, "config", "WORKFLOW.md", "path to WORKFLOW.md config")
+	flag.StringVar(&listen, "listen", "127.0.0.1", "HTTP observer bind address (use 0.0.0.0 to expose on all interfaces)")
 	flag.IntVar(&port, "port", 5567, "HTTP observer port")
+	flag.StringVar(&authToken, "auth-token", "", "shared secret required for POST /run (or set LOOPER_AUTH_TOKEN)")
+	flag.BoolVar(&enableRun, "enable-run", true, "allow POST /run when an auth token is configured")
 	flag.Parse()
+
+	if authToken == "" {
+		authToken = strings.TrimSpace(os.Getenv("LOOPER_AUTH_TOKEN"))
+	}
 
 	// Resolve config path relative to binary location
 	absConfig, err := filepath.Abs(configPath)
@@ -81,9 +91,13 @@ func main() {
 
 	// Observer
 	observer := internal.NewObserver(cfg, scheduler, runner, startTime)
+	observer.ConfigureRunEndpoint(authToken, enableRun)
+	if enableRun && authToken == "" {
+		slog.Warn("POST /run is enabled but no auth token is set; requests will be rejected until -auth-token or LOOPER_AUTH_TOKEN is configured")
+	}
 	go func() {
-		addr := fmt.Sprintf(":%d", port)
-		slog.Info("observer listening", "addr", addr)
+		addr := observerListenAddr(listen, port)
+		slog.Info("observer listening", "addr", addr, "enable_run", enableRun, "auth_required", authToken != "")
 		if err := http.ListenAndServe(addr, observer.Handler()); err != nil {
 			slog.Error("observer http", "error", err)
 		}
@@ -121,6 +135,15 @@ func main() {
 
 	scheduler.Stop()
 	slog.Info("goodbye")
+}
+
+// observerListenAddr builds the HTTP bind address. Empty listen defaults to loopback.
+func observerListenAddr(listen string, port int) string {
+	listen = strings.TrimSpace(listen)
+	if listen == "" {
+		listen = "127.0.0.1"
+	}
+	return fmt.Sprintf("%s:%d", listen, port)
 }
 
 func collectGlobalSkillDirs(cfg *internal.Config) []string {

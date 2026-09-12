@@ -423,7 +423,11 @@ async function refreshJobs() {
 }
 
 async function runJob(name) {
-  await fetch('/run?job=' + name, { method: 'POST' });
+  const headers = {};
+  if (window.__LOOPER_AUTH_TOKEN__) {
+    headers['Authorization'] = 'Bearer ' + window.__LOOPER_AUTH_TOKEN__;
+  }
+  await fetch('/run?job=' + encodeURIComponent(name), { method: 'POST', headers: headers });
   viewLog(name);
   refreshJobs();
 }

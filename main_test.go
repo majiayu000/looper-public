@@ -17,6 +17,18 @@ func (f *fakeReloadObserver) UpdateConfig(cfg *internal.Config) {
 	f.cfg = cfg
 }
 
+func TestObserverListenAddrDefaultsToLoopback(t *testing.T) {
+	if got := observerListenAddr("", 5567); got != "127.0.0.1:5567" {
+		t.Fatalf("empty listen: got %q", got)
+	}
+	if got := observerListenAddr("127.0.0.1", 5567); got != "127.0.0.1:5567" {
+		t.Fatalf("loopback listen: got %q", got)
+	}
+	if got := observerListenAddr("0.0.0.0", 8080); got != "0.0.0.0:8080" {
+		t.Fatalf("all-interfaces listen: got %q", got)
+	}
+}
+
 func TestResolveConfigPathExpandsHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {

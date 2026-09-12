@@ -2,6 +2,7 @@ package internal
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"database/sql"
 	_ "embed"
 	"encoding/json"
@@ -29,6 +30,8 @@ type Observer struct {
 	scheduler *Scheduler
 	runner    *Runner
 	startTime time.Time
+	authToken string
+	enableRun bool
 }
 
 type StatusResponse struct {
@@ -44,13 +47,34 @@ type PlatformStatus struct {
 }
 
 func NewObserver(config *Config, scheduler *Scheduler, runner *Runner, startTime time.Time) *Observer {
-	return &Observer{config: config, scheduler: scheduler, runner: runner, startTime: startTime}
+	return &Observer{
+		config:    config,
+		scheduler: scheduler,
+		runner:    runner,
+		startTime: startTime,
+		enableRun: true,
+	}
+}
+
+// ConfigureRunEndpoint sets whether POST /run is available and which shared token
+// is required. An empty token rejects all run requests (fail closed).
+func (o *Observer) ConfigureRunEndpoint(authToken string, enableRun bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.authToken = authToken
+	o.enableRun = enableRun
 }
 
 func (o *Observer) UpdateConfig(config *Config) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.config = config
+}
+
+func (o *Observer) runEndpointConfig() (authToken string, enableRun bool) {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.authToken, o.enableRun
 }
 
 func (o *Observer) getConfig() *Config {
@@ -78,7 +102,13 @@ func (o *Observer) Handler() http.Handler {
 
 func (o *Observer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(dashboardHTML)
+	html := dashboardHTML
+	if token, _ := o.runEndpointConfig(); token != "" {
+		// Inject token for same-origin dashboard Run buttons (loopback-only by default).
+		inject := []byte(fmt.Sprintf(`<script>window.__LOOPER_AUTH_TOKEN__=%q;</script>`, token))
+		html = bytes.Replace(dashboardHTML, []byte("</head>"), append(inject, []byte("</head>")...), 1)
+	}
+	w.Write(html)
 }
 
 func (o *Observer) handleJobs(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +147,17 @@ func (o *Observer) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (o *Observer) handleRun(w http.ResponseWriter, r *http.Request) {
+	authToken, enableRun := o.runEndpointConfig()
+	if !enableRun {
+		jsonError(w, "POST /run is disabled (pass -enable-run=true to allow)", http.StatusForbidden)
+		return
+	}
+	if !authorizeSharedToken(r, authToken) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="looper"`)
+		jsonError(w, "unauthorized: provide Authorization: Bearer <token> or X-Looper-Token", http.StatusUnauthorized)
+		return
+	}
+
 	jobName := r.URL.Query().Get("job")
 	if jobName == "" {
 		w.Header().Set("Content-Type", "application/json")
@@ -147,6 +188,31 @@ func (o *Observer) handleRun(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		slog.Error("encode run success response", "error", err)
 	}
+}
+
+func extractSharedToken(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		const prefix = "Bearer "
+		if strings.HasPrefix(auth, prefix) {
+			return strings.TrimSpace(auth[len(prefix):])
+		}
+	}
+	if token := strings.TrimSpace(r.Header.Get("X-Looper-Token")); token != "" {
+		return token
+	}
+	return ""
+}
+
+// authorizeSharedToken requires a non-empty configured token and a matching request token.
+func authorizeSharedToken(r *http.Request, expected string) bool {
+	if expected == "" {
+		return false
+	}
+	provided := extractSharedToken(r)
+	if provided == "" || len(provided) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
 }
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\[[?][0-9;]*[a-zA-Z]|\x1b\[<[a-zA-Z]|\x04`)

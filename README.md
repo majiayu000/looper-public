@@ -22,10 +22,16 @@ sessions, and historical generated artifacts.
 ```bash
 go test ./...
 go build ./...
-./looper -config WORKFLOW.md -port 5567
+./looper -config WORKFLOW.md -port 5567 -auth-token "$LOOPER_AUTH_TOKEN"
 ```
 
 Open `http://127.0.0.1:5567/health` to confirm the process is running.
+
+The HTTP observer binds to `127.0.0.1` by default. Use `-listen 0.0.0.0` only when you
+intentionally need a non-loopback bind. `POST /run` requires a shared token via
+`-auth-token` or `LOOPER_AUTH_TOKEN` (`Authorization: Bearer …` or `X-Looper-Token`).
+Disable manual runs with `-enable-run=false`. The local dashboard injects the token
+automatically when one is configured.
 
 The included `WORKFLOW.md` is a no-op example. Replace it with your own local
 workflow before running real jobs.
