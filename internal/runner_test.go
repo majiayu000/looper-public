@@ -211,3 +211,34 @@ func TestBuildSkillCommandCodexBypassSkipsSandbox(t *testing.T) {
 		t.Fatalf("dangerous bypass should not also pass sandbox: %s", cmd)
 	}
 }
+
+func TestScrubChildEnvironRemovesAuthToken(t *testing.T) {
+	in := []string{"PATH=/bin", "LOOPER_AUTH_TOKEN=secret", "HOME=/tmp", "LOOPER_AUTH_TOKEN_EXTRA=keep"}
+	got := scrubChildEnviron(in)
+	want := []string{"PATH=/bin", "HOME=/tmp", "LOOPER_AUTH_TOKEN_EXTRA=keep"}
+	if len(got) != len(want) {
+		t.Fatalf("scrubChildEnviron len=%d want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("scrubChildEnviron[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRunScrubsAuthTokenFromChildEnv(t *testing.T) {
+	t.Setenv("LOOPER_AUTH_TOKEN", "should-not-leak")
+	r := NewRunner(t.TempDir(), nil, nil)
+	result, err := r.Run(context.Background(), JobConfig{
+		Name:    "test_scrub_auth_env",
+		Type:    "script",
+		Command: "printenv LOOPER_AUTH_TOKEN || true",
+		Workdir: ".",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if strings.Contains(result.Output, "should-not-leak") {
+		t.Fatalf("child inherited LOOPER_AUTH_TOKEN: %q", result.Output)
+	}
+}

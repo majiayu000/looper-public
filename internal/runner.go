@@ -88,6 +88,7 @@ func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = job.Workdir
+	cmd.Env = scrubChildEnviron(os.Environ())
 	prepareCommand(cmd)
 	cmd.Cancel = func() error {
 		return terminateCommand(cmd)
@@ -238,4 +239,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// scrubChildEnviron returns env without LOOPER_AUTH_TOKEN so job processes
+// cannot read or log the observer command-triggering credential.
+func scrubChildEnviron(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, "LOOPER_AUTH_TOKEN=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }

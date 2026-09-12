@@ -14,6 +14,7 @@ trusted input and review them before running Looper.
 - The HTTP observer listens on `127.0.0.1` by default (`-listen` / `-port`).
 - `POST /run` is fail-closed: it requires `-auth-token` or `LOOPER_AUTH_TOKEN`.
 - Prefer `LOOPER_AUTH_TOKEN` so the secret is not exposed via process argv.
+- After startup reads `LOOPER_AUTH_TOKEN`, it is unset from the process environment; job shells also scrub it from `Cmd.Env` so children cannot inherit the credential.
 - The dashboard does not embed the shared token in `GET /` HTML; operators supply
   it client-side when triggering runs.
 - Dashboard HTML attribute sinks escape quotes so stored content cannot break out

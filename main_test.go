@@ -228,3 +228,23 @@ func TestApplyConfigReloadSuccess(t *testing.T) {
 		t.Fatalf("scheduler jobs not updated: %v", names)
 	}
 }
+
+func TestResolveAuthTokenUnsetsEnv(t *testing.T) {
+	t.Setenv("LOOPER_AUTH_TOKEN", "env-secret")
+	got := resolveAuthToken("")
+	if got != "env-secret" {
+		t.Fatalf("resolveAuthToken from env: got %q", got)
+	}
+	if _, ok := os.LookupEnv("LOOPER_AUTH_TOKEN"); ok {
+		t.Fatal("expected LOOPER_AUTH_TOKEN to be unset after resolve")
+	}
+
+	t.Setenv("LOOPER_AUTH_TOKEN", "env-ignored")
+	got = resolveAuthToken("  flag-secret  ")
+	if got != "flag-secret" {
+		t.Fatalf("resolveAuthToken from flag: got %q", got)
+	}
+	if _, ok := os.LookupEnv("LOOPER_AUTH_TOKEN"); ok {
+		t.Fatal("expected LOOPER_AUTH_TOKEN to be unset when flag wins")
+	}
+}

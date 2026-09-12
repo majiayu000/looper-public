@@ -35,10 +35,7 @@ func main() {
 	flag.BoolVar(&allowInsecureRemote, "allow-insecure-remote", false, "permit cleartext HTTP with auth on a non-loopback -listen (prefer TLS reverse proxy to loopback)")
 	flag.Parse()
 
-	authToken = strings.TrimSpace(authToken)
-	if authToken == "" {
-		authToken = strings.TrimSpace(os.Getenv("LOOPER_AUTH_TOKEN"))
-	}
+	authToken = resolveAuthToken(authToken)
 
 	// Resolve config path relative to binary location
 	absConfig, err := filepath.Abs(configPath)
@@ -147,6 +144,17 @@ func main() {
 }
 
 // observerListenAddr builds the HTTP bind address. Empty listen defaults to loopback.
+// resolveAuthToken returns the trimmed CLI or env token and removes
+// LOOPER_AUTH_TOKEN from this process environment so child job shells do not inherit it.
+func resolveAuthToken(flagToken string) string {
+	token := strings.TrimSpace(flagToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("LOOPER_AUTH_TOKEN"))
+	}
+	_ = os.Unsetenv("LOOPER_AUTH_TOKEN")
+	return token
+}
+
 func observerListenAddr(listen string, port int) string {
 	listen = strings.TrimSpace(listen)
 	if listen == "" {
