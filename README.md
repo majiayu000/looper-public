@@ -27,6 +27,13 @@ go build ./...
 
 Open `http://127.0.0.1:5567/health` to confirm the process is running.
 
+The observer listens only on `127.0.0.1`; `-port` changes the port, not the
+bind address. Its dashboard and APIs, including `POST /run`, are for trusted
+local use and do not require authentication. Do not expose the observer through
+a public reverse proxy or port forward.
+Manual runs reject non-local `Host` values and cross-origin browser requests;
+the local dashboard and command-line clients can still trigger configured jobs.
+
 The included `WORKFLOW.md` is a no-op example. Replace it with your own local
 workflow before running real jobs.
 

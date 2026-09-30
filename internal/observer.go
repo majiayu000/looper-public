@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -70,7 +71,7 @@ func (o *Observer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/costs", o.handleCosts)
 	mux.HandleFunc("GET /status", o.handleStatus)
 	mux.HandleFunc("GET /health", o.handleHealth)
-	mux.HandleFunc("POST /run", o.handleRun)
+	mux.Handle("POST /run", http.NewCrossOriginProtection().Handler(http.HandlerFunc(o.handleRun)))
 	mux.HandleFunc("GET /logs", o.handleLogs)
 	mux.HandleFunc("GET /{$}", o.handleDashboard)
 	return mux
@@ -117,6 +118,15 @@ func (o *Observer) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (o *Observer) handleRun(w http.ResponseWriter, r *http.Request) {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = r.Host
+	}
+	if !strings.EqualFold(host, "localhost") && !net.ParseIP(host).IsLoopback() {
+		http.Error(w, "manual runs require a local host", http.StatusForbidden)
+		return
+	}
+
 	jobName := r.URL.Query().Get("job")
 	if jobName == "" {
 		w.Header().Set("Content-Type", "application/json")

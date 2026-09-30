@@ -113,6 +113,103 @@ func TestObserverHealth(t *testing.T) {
 	}
 }
 
+func TestObserverRunLocalJob(t *testing.T) {
+	dir := t.TempDir()
+	runner := NewRunner(dir, nil, nil)
+	done := make(chan string, 1)
+	scheduler := NewScheduler(runner, func(name string, result *RunResult, err error) {
+		if err != nil {
+			done <- err.Error()
+			return
+		}
+		done <- result.Output
+	})
+	if err := scheduler.Load([]JobConfig{{
+		Name: "probe", Schedule: "@every 24h", Type: "script",
+		Workdir: dir, Command: "echo local-job-ran",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	observer := NewObserver(&Config{}, scheduler, runner, time.Now())
+	server := httptest.NewServer(observer.Handler())
+	defer server.Close()
+
+	for _, client := range []string{"cli", "dashboard"} {
+		t.Run(client, func(t *testing.T) {
+			req, err := http.NewRequest("POST", server.URL+"/run?job=probe", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client == "dashboard" {
+				req.Header.Set("Origin", server.URL)
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+			}
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var body map[string]string
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusOK || body["status"] != "triggered" || body["job"] != "probe" {
+				t.Fatalf("unexpected run response: status=%d body=%v", resp.StatusCode, body)
+			}
+			select {
+			case output := <-done:
+				if output != "local-job-ran\n" {
+					t.Fatalf("unexpected job output: %q", output)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("local job did not finish")
+			}
+		})
+	}
+}
+
+func TestObserverRunRejectsRemoteBrowser(t *testing.T) {
+	for _, tc := range []struct {
+		name, host, origin, fetchSite string
+	}{
+		{name: "cross_origin", host: "127.0.0.1:5567", origin: "https://attacker.example"},
+		{name: "cross_site", host: "127.0.0.1:5567", fetchSite: "cross-site"},
+		{name: "different_port", host: "127.0.0.1:5567", origin: "http://127.0.0.1:8000"},
+		{name: "rebound_host", host: "attacker.example:5567", origin: "http://attacker.example:5567", fetchSite: "same-origin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			runner := NewRunner(dir, nil, nil)
+			done := make(chan struct{}, 1)
+			scheduler := NewScheduler(runner, func(string, *RunResult, error) { done <- struct{}{} })
+			if err := scheduler.Load([]JobConfig{{
+				Name: "probe", Schedule: "@every 24h", Type: "script",
+				Workdir: dir, Command: "echo unexpected-run",
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			observer := NewObserver(&Config{}, scheduler, runner, time.Now())
+			req := httptest.NewRequest("POST", "http://127.0.0.1:5567/run?job=probe", nil)
+			req.Host = tc.host
+			req.Header.Set("Origin", tc.origin)
+			req.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			w := httptest.NewRecorder()
+			observer.Handler().ServeHTTP(w, req)
+			if w.Code != http.StatusForbidden {
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("accepted job did not finish")
+				}
+				t.Fatalf("unsafe request accepted: status=%d body=%s", w.Code, w.Body.String())
+			}
+			if scheduler.JobStatuses()[0].LastRunAt != "" {
+				t.Fatal("rejected request triggered a job")
+			}
+		})
+	}
+}
+
 func setupPublishedItemTestDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
