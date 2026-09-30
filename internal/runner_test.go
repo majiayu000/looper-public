@@ -211,3 +211,48 @@ func TestBuildSkillCommandCodexBypassSkipsSandbox(t *testing.T) {
 		t.Fatalf("dangerous bypass should not also pass sandbox: %s", cmd)
 	}
 }
+
+func TestLogPath(t *testing.T) {
+	for _, logDir := range []string{t.TempDir(), filepath.Join("relative", "logs")} {
+		runner := &Runner{logDir: logDir}
+		for _, name := range []string{"demo_job", "nightly..backup", "daily report"} {
+			path, err := runner.LogPath(name)
+			if err != nil {
+				t.Fatalf("LogPath(%q): %v", name, err)
+			}
+			if want := filepath.Join(logDir, name+".log"); path != want {
+				t.Errorf("LogPath(%q) = %q, want %q", name, path, want)
+			}
+		}
+		for _, name := range []string{"", ".", "..", "../outside", "nested/../../outside", "nested/job", `nested\job`, "/absolute"} {
+			if path, err := runner.LogPath(name); err == nil || path != "" {
+				t.Errorf("LogPath(%q) = %q, %v; want empty path and error", name, path, err)
+			}
+		}
+	}
+}
+
+func TestRunRejectsLogPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside.log")
+	if err := os.WriteFile(outside, []byte("original log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(filepath.Join(dir, "logs"), nil, nil)
+	result, err := runner.Run(context.Background(), JobConfig{
+		Name:    "../outside",
+		Type:    "script",
+		Command: "echo overwritten",
+		Workdir: dir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolve log path") || result != nil {
+		t.Fatalf("Run = %#v, %v; want log path error and no result", result, err)
+	}
+	data, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "original log\n" {
+		t.Fatalf("outside log was overwritten: %q", data)
+	}
+}

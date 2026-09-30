@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,7 +262,25 @@ func (o *Observer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logPath := o.runner.LogPath(jobName)
+	logPath, err := o.runner.LogPath(jobName)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); err != nil {
+			slog.Error("encode logs error response", "error", err)
+		}
+		return
+	}
+	if !slices.Contains(o.scheduler.JobNames(), jobName) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		if err := json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("job not found: %s", jobName),
+		}); err != nil {
+			slog.Error("encode logs error response", "error", err)
+		}
+		return
+	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
