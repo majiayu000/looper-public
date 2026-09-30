@@ -232,7 +232,7 @@ async function fetchJSON(url) {
   return r.json();
 }
 
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 function parseDbTime(ts) {
   if (!ts) return null;
@@ -296,7 +296,7 @@ function shortTime(ts) {
 }
 
 function tweetUrl(id) {
-  return 'https://x.com/i/status/' + id;
+  return 'https://x.com/i/status/' + encodeURIComponent(id);
 }
 
 function vlClass(v) {
@@ -381,11 +381,11 @@ async function refreshStatus() {
       if (p.action_breakdown) {
         breakdown = '<div class="breakdown">';
         for (const [k, v] of Object.entries(p.action_breakdown)) {
-          breakdown += '<span class="item"><b>' + v + '</b> ' + k + '</span>';
+          breakdown += '<span class="item"><b>' + v + '</b> ' + esc(k) + '</span>';
         }
         breakdown += '</div>';
       }
-      html += '<div class="card"><h2>' + name + '</h2>'
+      html += '<div class="card"><h2>' + esc(name) + '</h2>'
         + '<div class="metric"><span class="label">Health</span><span class="value ' + hc + '">' + p.health + '</span></div>'
         + '<div class="metric"><span class="label">Candidate Backlog</span><span class="value">' + p.candidate_backlog_pending + '</span></div>'
         + '<div class="metric"><span class="label">Today Actions</span><span class="value">' + p.today_actions + '</span></div>'
@@ -408,22 +408,27 @@ async function refreshJobs() {
       const ec = j.last_exit_code === 0 ? '<span class="badge-ok">0</span>' : (j.last_exit_code ? '<span class="badge-fail">' + j.last_exit_code + '</span>' : '-');
       const active = currentJob === j.name ? 'style="background:rgba(88,166,255,0.08)"' : '';
       html += '<tr ' + active + '>'
-        + '<td><a href="#" onclick="viewLog(\'' + j.name + '\');return false" style="color:var(--blue);text-decoration:none">' + j.name + '</a></td>'
+        + '<td><a href="#" class="job-log" style="color:var(--blue);text-decoration:none">' + esc(j.name) + '</a></td>'
         + '<td>' + tc + '</td>'
-        + '<td style="color:var(--dim)">' + j.schedule + '</td>'
+        + '<td style="color:var(--dim)">' + esc(j.schedule) + '</td>'
         + '<td>' + sc + '</td>'
         + '<td>' + timeAgo(j.last_run_at) + '</td>'
-        + '<td>' + (j.last_duration || '-') + '</td>'
+        + '<td>' + esc(j.last_duration || '-') + '</td>'
         + '<td>' + ec + '</td>'
-        + '<td><button class="btn btn-run" onclick="runJob(\'' + j.name + '\')"' + (j.running ? ' disabled' : '') + '>Run</button></td>'
+        + '<td><button class="btn btn-run"' + (j.running ? ' disabled' : '') + '>Run</button></td>'
         + '</tr>';
     }
     el.innerHTML = html;
+    el.querySelectorAll('.job-log').forEach((link, i) => link.addEventListener('click', e => {
+      e.preventDefault();
+      viewLog(jobs[i].name);
+    }));
+    el.querySelectorAll('.btn-run').forEach((button, i) => button.addEventListener('click', () => runJob(jobs[i].name)));
   } catch(e) { console.error('jobs error', e); }
 }
 
 async function runJob(name) {
-  await fetch('/run?job=' + name, { method: 'POST' });
+  await fetch('/run?job=' + encodeURIComponent(name), { method: 'POST' });
   viewLog(name);
   refreshJobs();
 }
@@ -454,7 +459,7 @@ async function refreshLog() {
   if (!currentJob) return;
   try {
     const filter = logMode === 'summary' ? '&filter=summary' : '';
-    const r = await fetch('/logs?job=' + currentJob + filter);
+    const r = await fetch('/logs?job=' + encodeURIComponent(currentJob) + filter);
     const text = await r.text();
     const el = document.getElementById('logBody');
     if (logMode === 'summary') {
@@ -486,7 +491,7 @@ async function refreshReplies(pg) {
       const scoreText = formatReplyScore(r);
       const scoreTip = esc(replyScoreTooltip(r));
       html += '<tr>'
-        + '<td>' + shortTime(r.posted_at) + '</td>'
+        + '<td>' + esc(shortTime(r.posted_at)) + '</td>'
         + '<td class="author">' + esc(r.author) + '</td>'
         + '<td>' + esc(r.skeleton || '-') + '</td>'
         + '<td>' + esc(r.reply_style || '-') + '</td>'
@@ -496,7 +501,7 @@ async function refreshReplies(pg) {
         + '<td class="num ' + vlClass(r.likes) + '">' + r.likes + '</td>'
         + '<td class="num">' + r.target_views + '</td>'
         + '<td class="num">' + r.target_likes + '</td>'
-        + '<td><a class="tweet-link" href="' + tweetUrl(r.reply_id) + '" target="_blank">view</a></td>'
+        + '<td><a class="tweet-link" href="' + esc(tweetUrl(r.reply_id)) + '" target="_blank">view</a></td>'
         + '</tr>';
     }
     el.innerHTML = html;
@@ -520,8 +525,8 @@ async function refreshCandidateBacklog(pg) {
         + '<td class="text-preview" title="' + esc(q.text) + '">' + esc(q.text) + '</td>'
         + '<td class="num">' + q.likes + '</td>'
         + '<td class="num">' + q.views + '</td>'
-        + '<td>' + shortTime(q.discovered_at) + '</td>'
-        + '<td><a class="tweet-link" href="' + tweetUrl(q.tweet_id) + '" target="_blank">view</a></td>'
+        + '<td>' + esc(shortTime(q.discovered_at)) + '</td>'
+        + '<td><a class="tweet-link" href="' + esc(tweetUrl(q.tweet_id)) + '" target="_blank">view</a></td>'
         + '</tr>';
     }
     el.innerHTML = html;
@@ -547,8 +552,8 @@ async function refreshReplyReviews(pg) {
         + '<td class="text-preview" title="' + esc(q.parent_text) + '">' + esc(q.parent_text) + '</td>'
         + '<td class="text-preview" title="' + esc(q.reply_text) + '">' + esc(q.reply_text) + '</td>'
         + '<td>' + esc(reviewer) + '</td>'
-        + '<td>' + shortTime(q.created_at) + '</td>'
-        + '<td><a class="tweet-link" href="' + tweetUrl(q.parent_id) + '" target="_blank">parent</a></td>'
+        + '<td>' + esc(shortTime(q.created_at)) + '</td>'
+        + '<td><a class="tweet-link" href="' + esc(tweetUrl(q.parent_id)) + '" target="_blank">parent</a></td>'
         + '</tr>';
     }
     el.innerHTML = html;
@@ -567,7 +572,7 @@ async function refreshTracking(pg) {
     let html = '';
     for (const t of data) {
       html += '<tr>'
-        + '<td>' + shortTime(t.posted_at) + '</td>'
+        + '<td>' + esc(shortTime(t.posted_at)) + '</td>'
         + '<td class="author">' + esc(t.author) + '</td>'
         + '<td>' + esc(t.skeleton || '-') + '</td>'
         + '<td>' + esc(t.reply_style || '-') + '</td>'
@@ -576,8 +581,8 @@ async function refreshTracking(pg) {
         + '<td class="num">' + t.target_views + '</td>'
         + '<td class="num">' + t.target_likes + '</td>'
         + '<td>' + esc(t.check_stage || '-') + '</td>'
-        + '<td>' + shortTime(t.last_checked_at) + '</td>'
-        + '<td><a class="tweet-link" href="' + tweetUrl(t.reply_id) + '" target="_blank">view</a></td>'
+        + '<td>' + esc(shortTime(t.last_checked_at)) + '</td>'
+        + '<td><a class="tweet-link" href="' + esc(tweetUrl(t.reply_id)) + '" target="_blank">view</a></td>'
         + '</tr>';
     }
     el.innerHTML = html;
@@ -599,13 +604,13 @@ async function refreshRounds(pg) {
       try {
         const sk = JSON.parse(r.skeletons || '{}');
         for (const [k,v] of Object.entries(sk)) {
-          tags += '<span class="round-tag">' + esc(k) + ' x' + v + '</span>';
+          tags += '<span class="round-tag">' + esc(k) + ' x' + esc(v) + '</span>';
         }
       } catch(e) {}
       try {
         const sr = JSON.parse(r.skip_reasons || '{}');
         for (const [k,v] of Object.entries(sr)) {
-          tags += '<span class="round-tag skip">' + esc(k) + ' x' + v + '</span>';
+          tags += '<span class="round-tag skip">' + esc(k) + ' x' + esc(v) + '</span>';
         }
       } catch(e) {}
 
@@ -614,7 +619,7 @@ async function refreshRounds(pg) {
 
       html += '<div class="round-card">'
         + '<div class="round-header">'
-        + '<span class="round-time">#' + r.id + ' · ' + shortTime(r.ts) + '</span>'
+        + '<span class="round-time">#' + r.id + ' · ' + esc(shortTime(r.ts)) + '</span>'
         + '<span class="round-mode">' + esc(r.mode || 'normal') + '</span>'
         + hot
         + '</div>'
@@ -666,7 +671,7 @@ async function refreshCosts() {
     for (const s of sessions) {
       const tc = s.job_type === 'interactive' ? 'color:var(--purple)' : 'color:var(--blue)';
       html += '<tr>'
-        + '<td>' + shortTime(s.started_at) + '</td>'
+        + '<td>' + esc(shortTime(s.started_at)) + '</td>'
         + '<td style="' + tc + ';font-weight:600">' + esc(s.job_type) + '</td>'
         + '<td class="num">' + s.requests + '</td>'
         + '<td class="num">' + fmtTokens(s.input_tokens) + '</td>'
