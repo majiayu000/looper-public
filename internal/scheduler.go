@@ -136,6 +136,13 @@ func (s *Scheduler) Stop() {
 	}
 }
 
+// Pause stops cron scheduling without canceling in-flight jobs.
+func (s *Scheduler) Pause() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopLocked()
+}
+
 func (s *Scheduler) stopLocked() context.Context {
 	if s.cron == nil {
 		return nil

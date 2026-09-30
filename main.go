@@ -149,7 +149,7 @@ func resolveRelativePaths(cfg *internal.Config, baseDir string) {
 }
 
 type reloadScheduler interface {
-	Stop()
+	Pause()
 	Reload([]internal.JobConfig) error
 }
 
@@ -208,7 +208,7 @@ func applyConfigReload(
 		return fmt.Errorf("%s: %w", reason, cause)
 	}
 
-	scheduler.Stop()
+	scheduler.Pause()
 	runner.UpdateEngines(newCfg.Engines)
 	if skills != nil {
 		skills.SetGlobalDirs(collectGlobalSkillDirs(newCfg))
