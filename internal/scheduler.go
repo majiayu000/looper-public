@@ -34,17 +34,25 @@ type Scheduler struct {
 	statuses map[string]*JobStatus
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex // keyed scheduler mutexes; default key is job workdir
+	ctx      context.Context
+	cancel   context.CancelFunc
+	running  *sync.WaitGroup
 }
 
 const defaultJobTimeout = 30 * time.Minute
+const schedulerShutdownTimeout = 5 * time.Second
 
 func NewScheduler(runner *Runner, callback JobCallback) *Scheduler {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		runner:   runner,
 		callback: callback,
 		jobs:     make(map[string]JobConfig),
 		statuses: make(map[string]*JobStatus),
 		locks:    make(map[string]*sync.Mutex),
+		ctx:      ctx,
+		cancel:   cancel,
+		running:  &sync.WaitGroup{},
 	}
 }
 
@@ -80,6 +88,10 @@ func (s *Scheduler) loadLocked(jobs []JobConfig) error {
 		st.Type = j.Type
 		newStatuses[j.Name] = st
 	}
+	if s.ctx.Err() != nil {
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+		s.running = &sync.WaitGroup{}
+	}
 	s.cron = c
 	s.jobs = m
 	s.statuses = newStatuses
@@ -100,15 +112,37 @@ func (s *Scheduler) startLocked() {
 
 func (s *Scheduler) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stopLocked()
+	s.cancel()
+	cronDone := s.stopLocked()
+	running := s.running
+	s.mu.Unlock()
+
+	// Jobs need mu to finish their status and callback work. Wait without it,
+	// including manual runs that cron's completion context does not track.
+	done := make(chan struct{})
+	go func() {
+		if cronDone != nil {
+			<-cronDone.Done()
+		}
+		running.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(schedulerShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		slog.Error("scheduler shutdown timed out", "timeout", schedulerShutdownTimeout)
+	}
 }
 
-func (s *Scheduler) stopLocked() {
-	if s.cron != nil {
-		s.cron.Stop()
-		s.cron = nil
+func (s *Scheduler) stopLocked() context.Context {
+	if s.cron == nil {
+		return nil
 	}
+	done := s.cron.Stop()
+	s.cron = nil
+	return done
 }
 
 func (s *Scheduler) Reload(jobs []JobConfig) error {
@@ -126,10 +160,15 @@ func (s *Scheduler) Reload(jobs []JobConfig) error {
 func (s *Scheduler) RunNow(name string) error {
 	s.mu.Lock()
 	job, ok := s.jobs[name]
-	s.mu.Unlock()
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("job not found: %s", name)
 	}
+	if s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("scheduler stopped: %w", context.Canceled)
+	}
+	s.mu.Unlock()
 	go s.runJob(job)
 	return nil
 }
@@ -181,6 +220,16 @@ func jobLockKey(job JobConfig) string {
 
 func (s *Scheduler) runJob(job JobConfig) {
 	s.mu.Lock()
+	ctx := s.ctx
+	if ctx.Err() != nil {
+		s.mu.Unlock()
+		return
+	}
+	// Registration and shutdown cancellation share mu so no work can be
+	// added to this generation after Stop begins waiting for it.
+	running := s.running
+	running.Add(1)
+	defer running.Done()
 	st := s.statuses[job.Name]
 	if st == nil {
 		st = &JobStatus{Name: job.Name, Schedule: job.Schedule, Type: job.Type}
@@ -242,7 +291,7 @@ func (s *Scheduler) runJob(job JobConfig) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	slog.Info("job started", "name", job.Name, "type", job.Type)
