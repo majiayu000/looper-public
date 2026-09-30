@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -112,9 +111,6 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
-	}
-	if cfg.Learning.Enabled {
-		slog.Warn("learning is not implemented; enabled and guardrails have no effect")
 	}
 	return &cfg, nil
 }

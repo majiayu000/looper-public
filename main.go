@@ -78,6 +78,9 @@ func main() {
 	}
 	scheduler.Start()
 	slog.Info("scheduler started", "jobs", len(cfg.Scheduling.Jobs))
+	if cfg.Learning.Enabled {
+		slog.Warn("learning is not implemented; enabled and guardrails have no effect")
+	}
 
 	// Observer
 	observer := internal.NewObserver(cfg, scheduler, runner, startTime)
@@ -100,6 +103,9 @@ func main() {
 		if err := applyConfigReload(newCfg, &currentCfg, scheduler, runner, skills, observer); err != nil {
 			slog.Error("config reload failed", "error", err)
 			return
+		}
+		if currentCfg.Learning.Enabled {
+			slog.Warn("learning is not implemented; enabled and guardrails have no effect")
 		}
 		slog.Info("config reloaded",
 			"platforms", len(currentCfg.Platforms),

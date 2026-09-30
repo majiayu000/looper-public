@@ -51,8 +51,8 @@ Important fields:
 
 The `learning` fields are reserved and unimplemented. Neither `enabled` nor
 `guardrails` changes scheduling, job weights, or execution. Setting
-`learning.enabled: true` logs a warning when the configuration loads, including
-on hot reload.
+`learning.enabled: true` logs a warning after startup or a successful hot reload.
+Rejected configurations do not emit this warning.
 
 Do not commit real credentials, cookies, private databases, generated drafts, or
 production account strategy. Keep those in local ignored files.
