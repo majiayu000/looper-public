@@ -11,6 +11,7 @@ platforms:
       action_table: test_actions
       action_type_field: action_type
       action_time_field: acted_at
+      published_items_table: published_item_tracking
 
 engines:
   claude:
