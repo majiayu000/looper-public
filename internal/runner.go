@@ -65,7 +65,7 @@ func (r *Runner) LogPath(jobName string) string {
 }
 
 func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
-	command, err := r.buildCommand(job)
+	cmd, err := r.buildCommand(ctx, job)
 	if err != nil {
 		return &RunResult{
 			Output:   err.Error(),
@@ -86,7 +86,6 @@ func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
 
 	start := time.Now()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = job.Workdir
 	prepareCommand(cmd)
 	cmd.Cancel = func() error {
@@ -135,25 +134,25 @@ func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
 	}, nil
 }
 
-func (r *Runner) buildCommand(job JobConfig) (string, error) {
+func (r *Runner) buildCommand(ctx context.Context, job JobConfig) (*exec.Cmd, error) {
 	switch job.Type {
 	case "script":
 		if strings.TrimSpace(job.Command) == "" {
-			return "", fmt.Errorf("script job %q has empty command", job.Name)
+			return nil, fmt.Errorf("script job %q has empty command", job.Name)
 		}
-		return job.Command, nil
+		return exec.CommandContext(ctx, "sh", "-c", job.Command), nil
 	case "skill":
 		engine, ok := r.engine(job.Engine)
 		if !ok {
-			return "", fmt.Errorf("skill job %q references unknown engine %q", job.Name, job.Engine)
+			return nil, fmt.Errorf("skill job %q references unknown engine %q", job.Name, job.Engine)
 		}
-		return r.buildSkillCommand(job, engine)
+		return r.buildSkillCommand(ctx, job, engine)
 	default:
-		return "", fmt.Errorf("job %q has unsupported type %q", job.Name, job.Type)
+		return nil, fmt.Errorf("job %q has unsupported type %q", job.Name, job.Type)
 	}
 }
 
-func (r *Runner) buildSkillCommand(job JobConfig, engine EngineConfig) (string, error) {
+func (r *Runner) buildSkillCommand(ctx context.Context, job JobConfig, engine EngineConfig) (*exec.Cmd, error) {
 	skillPath := "/" + strings.TrimPrefix(job.Skill, "/")
 
 	switch engine.Kind {
@@ -171,15 +170,15 @@ func (r *Runner) buildSkillCommand(job JobConfig, engine EngineConfig) (string, 
 		if job.PermissionMode != "" {
 			parts = append(parts, "--permission-mode", shellQuote(job.PermissionMode))
 		}
-		return strings.Join(parts, " "), nil
+		return exec.CommandContext(ctx, "sh", "-c", strings.Join(parts, " ")), nil
 
 	case "codex":
 		if r.skills == nil {
-			return "", fmt.Errorf("codex skill job %q requires skill manager", job.Name)
+			return nil, fmt.Errorf("codex skill job %q requires skill manager", job.Name)
 		}
 		skillBody, err := r.skills.LoadSkillContent(job.Skill)
 		if err != nil {
-			return "", fmt.Errorf("load codex skill %q: %w", job.Skill, err)
+			return nil, fmt.Errorf("load codex skill %q: %w", job.Skill, err)
 		}
 
 		prompt := buildCodexSkillPrompt(job.Skill, skillBody)
@@ -187,31 +186,32 @@ func (r *Runner) buildSkillCommand(job JobConfig, engine EngineConfig) (string, 
 		sandbox := firstNonEmpty(job.Sandbox, engine.DefaultSandbox)
 		reasoning := firstNonEmpty(job.ReasoningEffort, engine.DefaultReasoningEffort)
 
-		parts := []string{shellQuote(engine.CLI), "exec"}
+		parts := []string{"exec"}
 		if engine.SkipGitRepoCheck {
 			parts = append(parts, "--skip-git-repo-check")
 		}
 		if engine.DangerouslyBypass {
 			parts = append(parts, "--dangerously-bypass-approvals-and-sandbox")
 		} else if sandbox != "" {
-			parts = append(parts, "--sandbox", shellQuote(sandbox))
+			parts = append(parts, "--sandbox", sandbox)
 		}
 		if model != "" {
-			parts = append(parts, "-m", shellQuote(model))
+			parts = append(parts, "-m", model)
 		}
 		if reasoning != "" {
 			cfg := fmt.Sprintf(`model_reasoning_effort="%s"`, reasoning)
-			parts = append(parts, "-c", shellQuote(cfg))
+			parts = append(parts, "-c", cfg)
 		}
 		if engine.Search {
 			parts = append(parts, "--search")
 		}
 		parts = append(parts, "--json", "-")
-		delimiter := "__LOOPER_CODEX_SKILL_PROMPT__"
-		return "cat <<'" + delimiter + "' | " + strings.Join(parts, " ") + "\n" + prompt + "\n" + delimiter, nil
+		cmd := exec.CommandContext(ctx, engine.CLI, parts...)
+		cmd.Stdin = strings.NewReader(prompt + "\n")
+		return cmd, nil
 
 	default:
-		return "", fmt.Errorf("unsupported engine kind %q for job %q", engine.Kind, job.Name)
+		return nil, fmt.Errorf("unsupported engine kind %q for job %q", engine.Kind, job.Name)
 	}
 }
 
