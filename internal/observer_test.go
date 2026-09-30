@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -227,145 +228,173 @@ func TestObserverTrackingHandlesFloatCandidateVR(t *testing.T) {
 	}
 }
 
-func TestObserverRepliesUsesConfiguredPublishedItemsTable(t *testing.T) {
-	const customTable = "custom_published_items"
-	dbPath := setupPublishedItemTestDBNamed(t, customTable)
-	cfg := &Config{
-		Platforms: map[string]PlatformConfig{
-			"test_platform": {
-				Enabled: true,
-				DB:      dbPath,
-				Metrics: MetricsConfig{PublishedItemsTable: customTable},
-			},
-		},
-	}
-	obs := NewObserver(cfg, nil, nil, time.Now())
-
-	req := httptest.NewRequest("GET", "/api/replies?platform=test_platform", nil)
-	w := httptest.NewRecorder()
-	obs.Handler().ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp paginatedResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("json decode: %v", err)
-	}
-	items, ok := resp.Data.([]any)
-	if !ok || len(items) != 1 {
-		t.Fatalf("expected one reply row from custom table, got %#v", resp.Data)
+func TestObserverPublishedItemsTable(t *testing.T) {
+	for _, tc := range []struct {
+		name, table, configured string
+		keepDefault, optional   bool
+	}{
+		{name: "omitted", table: "published_item_tracking", optional: true},
+		{name: "explicit_default", table: "published_item_tracking", configured: "published_item_tracking", optional: true},
+		{name: "custom_only", table: "custom_published_items", configured: "custom_published_items", optional: true},
+		{name: "custom_with_default", table: "custom_published_items", configured: "custom_published_items", keepDefault: true, optional: true},
+		{name: "custom_without_optional_columns", table: "custom_published_items", configured: "custom_published_items"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := setupPublishedItemTestDBNamed(t, tc.table)
+			db, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if tc.keepDefault {
+				if _, err := db.Exec("CREATE TABLE published_item_tracking AS SELECT * FROM " + tc.table); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.Exec("UPDATE " + tc.table + " SET reply_id = 'configured_row'"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec("INSERT INTO " + tc.table + " SELECT * FROM " + tc.table); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.optional {
+				for _, column := range []string{"selection_score", "candidate_vr"} {
+					if _, err := db.Exec("ALTER TABLE " + tc.table + " DROP COLUMN " + column); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			obs := NewObserver(&Config{Platforms: map[string]PlatformConfig{
+				"x": {Enabled: true, DB: dbPath, Metrics: MetricsConfig{PublishedItemsTable: tc.configured}},
+			}}, nil, nil, time.Now())
+			for _, endpoint := range []string{"replies", "tracking"} {
+				t.Run(endpoint, func(t *testing.T) {
+					w := httptest.NewRecorder()
+					// Omitted platform also exercises the existing x default.
+					obs.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/"+endpoint+"?page=2&per_page=1", nil))
+					if w.Code != http.StatusOK {
+						t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+					}
+					var resp paginatedResponse
+					if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+						t.Fatal(err)
+					}
+					items, ok := resp.Data.([]any)
+					if !ok || len(items) != 1 || resp.Total != 2 || resp.Page != 2 || resp.Pages != 2 {
+						t.Fatalf("wrong configured table or pagination: %#v", resp)
+					}
+					row := items[0].(map[string]any)
+					if row["reply_id"] != "configured_row" {
+						t.Fatalf("wrong table row: %#v", row)
+					}
+					if tc.optional {
+						if row["selection_score"] != 8.5 || row["candidate_vr"] != 10.683506096350133 {
+							t.Fatalf("optional columns: %#v", row)
+						}
+					} else if row["selection_score"] != nil || row["candidate_vr"] != nil {
+						t.Fatalf("missing optional columns: %#v", row)
+					}
+				})
+			}
+		})
 	}
 }
 
-func TestLookupPlatformSnapshotUnaffectedByUpdateConfig(t *testing.T) {
-	const customTable = "custom_published_items"
-	dbPath := setupPublishedItemTestDBNamed(t, customTable)
-	cfg := &Config{
-		Platforms: map[string]PlatformConfig{
-			"test_platform": {
-				Enabled: true,
-				DB:      dbPath,
-				Metrics: MetricsConfig{PublishedItemsTable: customTable},
-			},
-		},
+func TestObserverPublishedItemsErrors(t *testing.T) {
+	dbPath := setupPublishedItemTestDB(t)
+	for _, tc := range []struct {
+		name, dbPath, table, platform string
+		code                          int
+	}{
+		{name: "invalid_identifier", dbPath: dbPath, table: "published_item_tracking; DROP TABLE published_item_tracking", platform: "x", code: http.StatusBadRequest},
+		{name: "missing_table", dbPath: dbPath, table: "missing_items", platform: "x", code: http.StatusInternalServerError},
+		{name: "missing_db", dbPath: filepath.Join(t.TempDir(), "missing.db"), table: "custom_items", platform: "x", code: http.StatusInternalServerError},
+		{name: "unknown_platform", dbPath: dbPath, table: "published_item_tracking", platform: "unknown", code: http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := NewObserver(&Config{Platforms: map[string]PlatformConfig{
+				"x": {Enabled: true, DB: tc.dbPath, Metrics: MetricsConfig{PublishedItemsTable: tc.table}},
+			}}, nil, nil, time.Now())
+			for _, endpoint := range []string{"replies", "tracking"} {
+				w := httptest.NewRecorder()
+				obs.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/"+endpoint+"?platform="+tc.platform, nil))
+				if w.Code != tc.code {
+					t.Errorf("%s: status=%d want=%d body=%s", endpoint, w.Code, tc.code, w.Body.String())
+				}
+				var resp map[string]string
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp["error"] == "" {
+					t.Errorf("%s: missing JSON error: %s", endpoint, w.Body.String())
+				}
+			}
+		})
 	}
-	obs := NewObserver(cfg, nil, nil, time.Now())
-
-	snap, err := obs.lookupPlatform("test_platform")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate WORKFLOW.md hot-reload changing both DB path and table together.
-	obs.UpdateConfig(&Config{
-		Platforms: map[string]PlatformConfig{
-			"test_platform": {
-				Enabled: true,
-				DB:      filepath.Join(t.TempDir(), "missing.db"),
-				Metrics: MetricsConfig{PublishedItemsTable: "other_table"},
-			},
-		},
-	})
-
-	if snap.DB != dbPath {
-		t.Fatalf("snapshot DB path mutated after UpdateConfig: %q", snap.DB)
-	}
-	if snap.Metrics.PublishedItemsTable != customTable {
-		t.Fatalf("snapshot metrics mutated after UpdateConfig: %#v", snap.Metrics)
-	}
-	table, err := publishedItemsTable(snap.Metrics)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if table != customTable {
-		t.Fatalf("expected table %q from snapshot, got %q", customTable, table)
-	}
-
-	db, err := openSQLiteRO(snap.DB)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	var count int
-	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count); err != nil {
-		t.Fatalf("snapshot DB+table query failed after hot-reload: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 row from snapshot, got %d", count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM published_item_tracking").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("invalid name changed data: count=%d err=%v", count, err)
 	}
 }
 
-func TestObserverTrackingUsesConfiguredPublishedItemsTable(t *testing.T) {
-	const customTable = "custom_published_items"
-	dbPath := setupPublishedItemTestDBNamed(t, customTable)
-	cfg := &Config{
-		Platforms: map[string]PlatformConfig{
-			"test_platform": {
-				Enabled: true,
-				DB:      dbPath,
-				Metrics: MetricsConfig{PublishedItemsTable: customTable},
-			},
-		},
+func TestObserverPublishedItemsHotReload(t *testing.T) {
+	configs := make([]*Config, 2)
+	for i, table := range []string{"first_items", "second_items"} {
+		configs[i] = &Config{Platforms: map[string]PlatformConfig{
+			"x": {Enabled: true, DB: setupPublishedItemTestDBNamed(t, table), Metrics: MetricsConfig{PublishedItemsTable: table}},
+		}}
 	}
-	obs := NewObserver(cfg, nil, nil, time.Now())
-
-	req := httptest.NewRequest("GET", "/api/tracking?platform=test_platform", nil)
-	w := httptest.NewRecorder()
-	obs.Handler().ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp paginatedResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("json decode: %v", err)
-	}
-	items, ok := resp.Data.([]any)
-	if !ok || len(items) != 1 {
-		t.Fatalf("expected one tracking row from custom table, got %#v", resp.Data)
+	obs := NewObserver(configs[0], nil, nil, time.Now())
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			obs.UpdateConfig(configs[i%2])
+		}
+	}()
+	defer func() { close(stop); wg.Wait() }()
+	for i := 0; i < 100; i++ {
+		for _, endpoint := range []string{"replies", "tracking"} {
+			w := httptest.NewRecorder()
+			obs.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/"+endpoint, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s mixed database/table during reload: status=%d body=%s", endpoint, w.Code, w.Body.String())
+			}
+			var resp paginatedResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.Total != 1 {
+				t.Fatalf("%s wrong total during reload: %#v", endpoint, resp)
+			}
+		}
 	}
 }
 
 func TestValidateMetricsConfigRejectsInvalidPublishedItemsTable(t *testing.T) {
-	err := validateMetricsConfig(MetricsConfig{
-		PublishedItemsTable: "bad-table;drop",
-	})
-	if err == nil {
-		t.Fatal("expected invalid PublishedItemsTable to be rejected")
+	obs := NewObserver(&Config{Platforms: map[string]PlatformConfig{
+		"x": {Enabled: true, DB: setupPublishedItemTestDB(t), Metrics: MetricsConfig{PublishedItemsTable: "bad-table;drop"}},
+	}}, nil, nil, time.Now())
+	w := httptest.NewRecorder()
+	obs.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/status", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(err.Error(), "invalid SQL identifier") {
-		t.Fatalf("unexpected error: %v", err)
+	var resp StatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestPublishedItemsTableFallsBackToDefault(t *testing.T) {
-	table, err := publishedItemsTable(MetricsConfig{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if table != defaultPublishedItemsTable {
-		t.Fatalf("expected default %q, got %q", defaultPublishedItemsTable, table)
+	if resp.Platforms["x"].Health != "config_error" {
+		t.Fatalf("invalid metrics config not reported: %#v", resp)
 	}
 }
 

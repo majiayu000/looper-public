@@ -878,7 +878,7 @@ func validateMetricsConfig(m MetricsConfig) error {
 const defaultPublishedItemsTable = "published_item_tracking"
 
 // publishedItemsTable returns the configured published-items table name, or the
-// historical default when Metrics.PublishedItemsTable is empty.
+// default when Metrics.PublishedItemsTable is empty.
 func publishedItemsTable(m MetricsConfig) (string, error) {
 	table := m.PublishedItemsTable
 	if table == "" {
@@ -888,14 +888,6 @@ func publishedItemsTable(m MetricsConfig) (string, error) {
 		return "", err
 	}
 	return table, nil
-}
-
-func (o *Observer) platformMetrics(platform string) (MetricsConfig, error) {
-	p, err := o.lookupPlatform(platform)
-	if err != nil {
-		return MetricsConfig{}, err
-	}
-	return p.Metrics, nil
 }
 
 func (o *Observer) queryPlatformMetrics(name string, p PlatformConfig) PlatformStatus {
