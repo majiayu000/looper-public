@@ -40,13 +40,6 @@ scheduling:
       type: script
       timeout: 10s
 
-learning:
-  enabled: false
-  guardrails:
-    max_weight: 3.0
-    min_weight: 0.3
-    max_daily_change: 0.2
-    min_samples: 5
 ---
 
 # Looper Workflow
@@ -55,3 +48,7 @@ This Markdown file carries YAML front matter read by Looper. Keep private
 credentials, cookies, real account strategy, and local production database paths
 out of version control.
 
+
+The `learning` fields are reserved and unimplemented. Looper does not adjust job
+weights or enforce learning guardrails. Setting `learning.enabled: true` logs a
+warning when the configuration loads, including on hot reload.

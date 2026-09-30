@@ -49,6 +49,11 @@ Important fields:
 - `engines`: configured agent engines, such as `claude` or `codex`.
 - `scheduling.jobs`: cron entries for `script` or `skill` jobs.
 
+The `learning` fields are reserved and unimplemented. Neither `enabled` nor
+`guardrails` changes scheduling, job weights, or execution. Setting
+`learning.enabled: true` logs a warning when the configuration loads, including
+on hot reload.
+
 Do not commit real credentials, cookies, private databases, generated drafts, or
 production account strategy. Keep those in local ignored files.
 

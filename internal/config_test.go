@@ -1,6 +1,9 @@
 package internal
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,5 +288,55 @@ scheduling:
 	}
 	if !strings.Contains(err.Error(), "duplicate job name") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfigWarnsForUnimplementedLearning(t *testing.T) {
+	base := `engines:
+  claude:
+    kind: claude
+    cli: claude
+    skills_dir: /tmp/skills
+`
+	for _, format := range []string{"yaml", "markdown"} {
+		for _, state := range []string{"enabled", "disabled", "omitted", "invalid"} {
+			t.Run(format+"/"+state, func(t *testing.T) {
+				content := base
+				if state != "omitted" {
+					enabled := state != "disabled"
+					content += fmt.Sprintf("learning:\n  enabled: %t\n", enabled)
+				}
+				if state == "invalid" {
+					content += "scheduling:\n  jobs:\n    - name: invalid\n"
+				}
+				if format == "markdown" {
+					content = "---\n" + content + "---\n# Workflow\n"
+				}
+				path := filepath.Join(t.TempDir(), "workflow")
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatalf("write config: %v", err)
+				}
+				var logs bytes.Buffer
+				previous := slog.Default()
+				slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+				t.Cleanup(func() { slog.SetDefault(previous) })
+
+				cfg, err := LoadConfig(path)
+				if state == "invalid" {
+					if cfg != nil || err == nil || !strings.Contains(err.Error(), "validate config: job") {
+						t.Fatalf("expected original validation error, got cfg=%v err=%v", cfg, err)
+					}
+				} else if err != nil {
+					t.Fatalf("load config: %v", err)
+				}
+				if state == "enabled" {
+					if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "learning is not implemented; enabled and guardrails have no effect") {
+						t.Fatalf("missing unsupported learning warning: %q", logs.String())
+					}
+				} else if logs.Len() != 0 {
+					t.Fatalf("unexpected warning: %q", logs.String())
+				}
+			})
+		}
 	}
 }
