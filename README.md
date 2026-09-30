@@ -19,16 +19,24 @@ sessions, and historical generated artifacts.
 
 ## Quick Start
 
+Requires Go 1.25 or newer. Shell jobs use your local shell; agent skill jobs
+also require the configured Claude Code or Codex CLI.
+
 ```bash
+git clone https://github.com/majiayu000/looper-public.git
+cd looper-public
 go test ./...
-go build ./...
+go build -o looper .
 ./looper -config WORKFLOW.md -port 5567
 ```
 
 Open `http://127.0.0.1:5567/health` to confirm the process is running.
 
-The included `WORKFLOW.md` is a no-op example. Replace it with your own local
-workflow before running real jobs.
+The included [WORKFLOW.md](WORKFLOW.md) is a no-op example. Replace it with
+your own local workflow before running real jobs.
+
+See [Configuration](#configuration) for workflow fields and
+[SECURITY.md](SECURITY.md) for handling trusted local commands.
 
 ## Configuration
 
