@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,29 +85,153 @@ func TestSchedulerStopKillsProcessGroups(t *testing.T) {
 	}
 }
 
-func TestSchedulerStopAllowsReload(t *testing.T) {
-	completed := make(chan error, 1)
-	s := NewScheduler(NewRunner(t.TempDir(), nil, nil), func(_ string, _ *RunResult, err error) { completed <- err })
+func TestSchedulerStopRejectsReload(t *testing.T) {
+	s := NewScheduler(NewRunner(t.TempDir(), nil, nil), nil)
 	job := JobConfig{Name: "reloaded", Schedule: "@every 1h", Type: "script", Workdir: t.TempDir(), Command: "echo reloaded"}
 	if err := s.Load([]JobConfig{job}); err != nil {
 		t.Fatal(err)
 	}
-	s.Stop()
-	s.Stop()
-	if err := s.Reload([]JobConfig{job}); err != nil {
-		t.Fatal(err)
-	}
 	defer s.Stop()
-	if err := s.RunNow(job.Name); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-completed:
-		if err != nil {
-			t.Fatal(err)
+	s.Stop()
+	s.Stop()
+	for _, load := range []func([]JobConfig) error{s.Load, s.Reload} {
+		if err := load([]JobConfig{job}); !errors.Is(err, context.Canceled) {
+			t.Errorf("load after Stop error=%v; want cancellation", err)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("reloaded job did not complete")
+	}
+	s.Start()
+	if err := s.RunNow(job.Name); !errors.Is(err, context.Canceled) {
+		t.Errorf("RunNow after Stop error=%v; want cancellation", err)
+	}
+}
+
+func TestSchedulerStopRejectsConcurrentReload(t *testing.T) {
+	for _, trigger := range []string{"manual", "cron"} {
+		for _, load := range []string{"Load", "Reload"} {
+			t.Run(trigger+"/"+load, func(t *testing.T) {
+				entered := make(chan error, 1)
+				release := make(chan struct{})
+				stopped := make(chan struct{})
+				s := NewScheduler(NewRunner(t.TempDir(), nil, nil), func(name string, _ *RunResult, err error) {
+					if name == "active" {
+						entered <- err
+						<-release
+					}
+				})
+				command := `echo $$ > parent.pid; sh -c 'trap "" TERM; echo $$ > child.pid; while :; do sleep 1; done' & wait`
+				active := JobConfig{Name: "active", Schedule: "@every 1h", Type: "script", Timeout: "1m", Workdir: t.TempDir(), Command: command}
+				fresh := active
+				fresh.Name = "fresh"
+				fresh.Workdir = t.TempDir()
+				if trigger == "cron" {
+					fresh.Schedule = "@every 1s"
+				}
+				if err := s.Load([]JobConfig{active}); err != nil {
+					t.Fatal(err)
+				}
+				var parents []int
+				released := false
+				t.Cleanup(func() {
+					if !released {
+						close(release)
+					}
+					s.Stop()
+					for _, pid := range parents {
+						_ = syscall.Kill(-pid, syscall.SIGKILL)
+					}
+				})
+				if err := s.RunNow(active.Name); err != nil {
+					t.Fatal(err)
+				}
+				parent := waitForShutdownPID(t, filepath.Join(active.Workdir, "parent.pid"))
+				parents = append(parents, parent)
+				child := waitForShutdownPID(t, filepath.Join(active.Workdir, "child.pid"))
+				for _, pid := range []int{parent, child} {
+					if !shutdownProcessAlive(t, pid) {
+						t.Fatalf("active PID %d did not start", pid)
+					}
+				}
+				go func() { s.Stop(); close(stopped) }()
+				select {
+				case err := <-entered:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("active callback error=%v; want cancellation", err)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("Stop did not cancel the active job")
+				}
+				select {
+				case <-stopped:
+					t.Fatal("Stop returned before callback release")
+				default:
+				}
+				// The blocked callback holds Stop in its unlocked drain phase.
+				// Attempt the same pause/load/restart sequence as a watcher reload.
+				s.Pause()
+				var err error
+				if load == "Reload" {
+					err = s.Reload([]JobConfig{fresh})
+				} else {
+					err = s.Load([]JobConfig{fresh})
+					s.Start()
+				}
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("%s during Stop error=%v; want cancellation", load, err)
+				}
+				var freshPIDs []int
+				if trigger == "manual" {
+					observer := NewObserver(&Config{}, s, s.runner, time.Now())
+					response := httptest.NewRecorder()
+					runName := fresh.Name
+					if err != nil {
+						runName = active.Name
+					}
+					observer.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://127.0.0.1/run?job="+runName, nil))
+					if response.Code != http.StatusNotFound {
+						t.Errorf("/run during Stop status=%d body=%s; want existing rejection", response.Code, response.Body.String())
+					}
+					if err != nil && !strings.Contains(response.Body.String(), "scheduler stopped") {
+						t.Errorf("/run cancellation error missing: %s", response.Body.String())
+					}
+				}
+				if err == nil {
+					// On the broken source, prove that actual new parent/child
+					// processes start while Stop tracks only the old wait group.
+					freshParent := waitForShutdownPID(t, filepath.Join(fresh.Workdir, "parent.pid"))
+					parents = append(parents, freshParent)
+					freshChild := waitForShutdownPID(t, filepath.Join(fresh.Workdir, "child.pid"))
+					freshPIDs = []int{freshParent, freshChild}
+					for _, pid := range freshPIDs {
+						pgid, groupErr := syscall.Getpgid(pid)
+						if groupErr != nil || pgid != freshParent {
+							t.Fatalf("fresh PID %d group=%d error=%v; want %d", pid, pgid, groupErr, freshParent)
+						}
+					}
+				}
+				close(release)
+				released = true
+				select {
+				case <-stopped:
+				case <-time.After(3 * time.Second):
+					t.Fatal("Stop did not drain the old job")
+				}
+				for _, pid := range append([]int{parent, child}, freshPIDs...) {
+					if shutdownProcessAlive(t, pid) {
+						t.Errorf("PID %d survived terminal Stop", pid)
+					}
+				}
+				if err != nil {
+					for _, name := range []string{"parent.pid", "child.pid"} {
+						if _, statErr := os.Stat(filepath.Join(fresh.Workdir, name)); !errors.Is(statErr, os.ErrNotExist) {
+							t.Errorf("fresh %s created after terminal Stop: %v", name, statErr)
+						}
+					}
+				}
+				if err := s.RunNow(active.Name); !errors.Is(err, context.Canceled) {
+					t.Errorf("RunNow after drain error=%v; want cancellation", err)
+				}
+			})
+		}
 	}
 }
 

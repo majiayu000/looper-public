@@ -63,6 +63,9 @@ func (s *Scheduler) Load(jobs []JobConfig) error {
 }
 
 func (s *Scheduler) loadLocked(jobs []JobConfig) error {
+	if s.ctx.Err() != nil {
+		return fmt.Errorf("scheduler stopped: %w", context.Canceled)
+	}
 	c := cron.New()
 	m := make(map[string]JobConfig, len(jobs))
 	newStatuses := make(map[string]*JobStatus, len(jobs))
@@ -87,10 +90,6 @@ func (s *Scheduler) loadLocked(jobs []JobConfig) error {
 		st.Schedule = j.Schedule
 		st.Type = j.Type
 		newStatuses[j.Name] = st
-	}
-	if s.ctx.Err() != nil {
-		s.ctx, s.cancel = context.WithCancel(context.Background())
-		s.running = &sync.WaitGroup{}
 	}
 	s.cron = c
 	s.jobs = m
