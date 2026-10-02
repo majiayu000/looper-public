@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -8,6 +9,19 @@ import (
 
 	"looper/internal"
 )
+
+func TestObserverListenAddrIsLoopback(t *testing.T) {
+	listener, err := net.Listen("tcp", observerListenAddr(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().(*net.TCPAddr)
+	if !addr.IP.IsLoopback() {
+		t.Fatalf("observer exposed on non-loopback address %s", addr)
+	}
+}
 
 type fakeReloadObserver struct {
 	cfg *internal.Config

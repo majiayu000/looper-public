@@ -82,7 +82,7 @@ func main() {
 	// Observer
 	observer := internal.NewObserver(cfg, scheduler, runner, startTime)
 	go func() {
-		addr := fmt.Sprintf(":%d", port)
+		addr := observerListenAddr(port)
 		slog.Info("observer listening", "addr", addr)
 		if err := http.ListenAndServe(addr, observer.Handler()); err != nil {
 			slog.Error("observer http", "error", err)
@@ -121,6 +121,10 @@ func main() {
 
 	scheduler.Stop()
 	slog.Info("goodbye")
+}
+
+func observerListenAddr(port int) string {
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
 func collectGlobalSkillDirs(cfg *internal.Config) []string {
