@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -425,5 +426,81 @@ func TestFilterNDJSONCodex(t *testing.T) {
 	}
 	if !strings.Contains(out, "[text] done") {
 		t.Fatalf("expected final Codex text in summary, got: %q", out)
+	}
+}
+
+func TestObserverLogs(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "logs")
+	runner := NewRunner(logDir, nil, nil)
+	scheduler := NewScheduler(runner, nil)
+	jobs := []JobConfig{
+		{Name: "demo..job", Schedule: "@every 1h"},
+		{Name: "missing_job", Schedule: "@every 1h"},
+		{Name: "../outside", Schedule: "@every 1h"},
+		{Name: "nested/../demo..job", Schedule: "@every 1h"},
+		{Name: `..\outside`, Schedule: "@every 1h"},
+	}
+	if err := scheduler.Load(jobs); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		filepath.Join(dir, "outside.log"):      "outside log marker\n",
+		filepath.Join(logDir, "unlisted.log"):  "unregistered log marker\n",
+		filepath.Join(logDir, "demo..job.log"): "\x1b[31mdemo log\x1b[0m\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observer := NewObserver(&Config{}, scheduler, runner, time.Now())
+	for _, tc := range []struct {
+		name   string
+		job    string
+		status int
+		body   string
+	}{
+		{name: "registered", job: "demo..job", status: http.StatusOK, body: "demo log\n"},
+		{name: "missing parameter", status: http.StatusOK, body: "missing ?job= parameter"},
+		{name: "missing log", job: "missing_job", status: http.StatusNotFound, body: "no log for job missing_job"},
+		{name: "unregistered existing log", job: "unlisted", status: http.StatusNotFound},
+		{name: "registered traversal", job: "../outside", status: http.StatusBadRequest},
+		{name: "unregistered traversal", job: "nested/../../outside", status: http.StatusBadRequest},
+		{name: "registered cleaned alias", job: "nested/../demo..job", status: http.StatusBadRequest},
+		{name: "backslash", job: `..\outside`, status: http.StatusBadRequest},
+		{name: "absolute path", job: filepath.Join(dir, "outside"), status: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/logs?job="+url.QueryEscape(tc.job), nil)
+			w := httptest.NewRecorder()
+			observer.Handler().ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Errorf("status = %d, want %d; body = %q", w.Code, tc.status, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "outside log marker") || strings.Contains(w.Body.String(), "unregistered log marker") {
+				t.Error("response disclosed a log outside the registered job")
+			}
+			if tc.job != "demo..job" {
+				var response map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Errorf("expected JSON error: %v", err)
+				}
+				if response["error"] == nil {
+					t.Error("missing error field")
+				}
+			}
+			if !strings.Contains(w.Body.String(), tc.body) {
+				t.Errorf("body = %q, want %q", w.Body.String(), tc.body)
+			}
+		})
+	}
+
+	if err := scheduler.Reload(jobs[1:]); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	observer.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/logs?job=demo..job", nil))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("removed job log remains accessible: status = %d, body = %q", w.Code, w.Body.String())
 	}
 }

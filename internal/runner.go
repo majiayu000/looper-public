@@ -59,9 +59,12 @@ func (r *Runner) engine(name string) (EngineConfig, bool) {
 	return e, ok
 }
 
-// LogPath returns the log file path for a job.
-func (r *Runner) LogPath(jobName string) string {
-	return filepath.Join(r.logDir, jobName+".log")
+// LogPath returns the log file path for a job with a single filename as its name.
+func (r *Runner) LogPath(jobName string) (string, error) {
+	if !filepath.IsLocal(jobName) || jobName == "." || strings.ContainsAny(jobName, `/\`) {
+		return "", fmt.Errorf("invalid job name %q", jobName)
+	}
+	return filepath.Join(r.logDir, jobName+".log"), nil
 }
 
 func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
@@ -94,7 +97,10 @@ func (r *Runner) Run(ctx context.Context, job JobConfig) (*RunResult, error) {
 	}
 	cmd.WaitDelay = 2 * time.Second
 
-	logPath := r.LogPath(job.Name)
+	logPath, err := r.LogPath(job.Name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve log path: %w", err)
+	}
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("create log file %s: %w", logPath, err)
