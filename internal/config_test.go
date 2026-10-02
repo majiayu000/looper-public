@@ -30,6 +30,9 @@ func TestLoadConfig(t *testing.T) {
 	if p.Metrics.CandidateBacklogTable != "test_candidate_backlog" {
 		t.Errorf("expected candidate_backlog_table=test_candidate_backlog, got %s", p.Metrics.CandidateBacklogTable)
 	}
+	if p.Metrics.PublishedItemsTable != "published_item_tracking" {
+		t.Errorf("expected published_items_table=published_item_tracking, got %s", p.Metrics.PublishedItemsTable)
+	}
 
 	// engines
 	if len(cfg.Engines) != 2 {
@@ -85,6 +88,9 @@ func TestLoadRealWorkflow(t *testing.T) {
 	}
 	if platform.Enabled {
 		t.Fatal("demo platform should be disabled in the public example")
+	}
+	if platform.Metrics.PublishedItemsTable != "published_item_tracking" {
+		t.Fatalf("demo published_items_table = %q, want published_item_tracking", platform.Metrics.PublishedItemsTable)
 	}
 
 	requiredEngines := map[string]string{
