@@ -76,11 +76,13 @@ type PricingConfig struct {
 	CacheRead   float64 `yaml:"cache_read"`
 }
 
+// LearningConfig is reserved; no learning or guardrail behavior is implemented.
 type LearningConfig struct {
 	Enabled    bool            `yaml:"enabled"`
 	Guardrails GuardrailConfig `yaml:"guardrails"`
 }
 
+// GuardrailConfig is reserved and does not constrain job execution.
 type GuardrailConfig struct {
 	MaxWeight      float64 `yaml:"max_weight"`
 	MinWeight      float64 `yaml:"min_weight"`
